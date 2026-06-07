@@ -98,6 +98,13 @@
             <version>${clickhouse.version}</version>
         </dependency>
 
+        <!-- LZ4 compression support for MySQL protocol -->
+        <dependency>
+            <groupId>org.lz4</groupId>
+            <artifactId>lz4-java</artifactId>
+            <version>1.8.0</version>
+        </dependency>
+
         <!-- API Doc -->
         <dependency>
             <groupId>org.springdoc</groupId>

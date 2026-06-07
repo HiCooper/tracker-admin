@@ -1,10 +1,8 @@
 package com.gateflow.tracker.service;
 
+import com.gateflow.tracker.config.ClickHouseQueryHelper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -15,8 +13,7 @@ import java.util.*;
 @RequiredArgsConstructor
 public class DataQualityService {
 
-    @Qualifier("clickHouseJdbcTemplate")
-    private final NamedParameterJdbcTemplate chJdbc;
+    private final ClickHouseQueryHelper ch;
 
     public List<Map<String, Object>> fieldNullRates() {
         String sql = """
@@ -29,7 +26,7 @@ public class DataQualityService {
             WHERE timestamp >= now() - INTERVAL 24 HOUR
             GROUP BY event_type ORDER BY total DESC
             """;
-        List<Map<String, Object>> rows = chJdbc.queryForList(sql, new MapSqlParameterSource());
+        List<Map<String, Object>> rows = ch.query(sql);
         List<Map<String, Object>> result = new ArrayList<>();
         for (Map<String, Object> row : rows) {
             Map<String, Object> item = new LinkedHashMap<>();
@@ -54,7 +51,7 @@ public class DataQualityService {
                        WHERE timestamp >= yesterday() AND timestamp < today() GROUP BY event_type) yesterday
             ON today.event_type = yesterday.event_type ORDER BY today.cnt DESC
             """;
-        List<Map<String, Object>> rows = chJdbc.queryForList(sql, new MapSqlParameterSource());
+        List<Map<String, Object>> rows = ch.query(sql);
         List<Map<String, Object>> result = new ArrayList<>();
         for (Map<String, Object> row : rows) {
             Map<String, Object> item = new LinkedHashMap<>();

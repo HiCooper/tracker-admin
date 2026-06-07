@@ -2,12 +2,10 @@ package com.gateflow.tracker.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gateflow.tracker.config.ClickHouseQueryHelper;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -18,8 +16,7 @@ import java.util.*;
 @RequiredArgsConstructor
 public class DashboardDataService {
 
-    @Qualifier("clickHouseJdbcTemplate")
-    private final NamedParameterJdbcTemplate chJdbc;
+    private final ClickHouseQueryHelper ch;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private static final String EVENTS = "gateflow_tracker.events";
@@ -94,11 +91,10 @@ public class DashboardDataService {
         String aggFn = agg(q);
         String eventType = q.has("eventType") ? q.get("eventType").asText() : null;
         StringBuilder sql = new StringBuilder("SELECT ").append(aggFn).append(" AS value FROM ").append(EVENTS);
-        sql.append(" WHERE timestamp BETWEEN :t0 AND :t1");
+        sql.append(" WHERE timestamp BETWEEN '").append(start).append("' AND '").append(end.plusDays(1)).append("'");
         if (eventType != null) sql.append(" AND event_type = '").append(esc(eventType)).append("'");
         appendFilters(sql, q);
-        MapSqlParameterSource ps = params(start, end);
-        Map<String, Object> row = chJdbc.queryForMap(sql.toString(), ps);
+        Map<String, Object> row = ch.queryOne(sql.toString());
         return Map.of("value", row.get("value"), "label", q.has("label") ? q.get("label").asText() : "value");
     }
 
@@ -109,7 +105,7 @@ public class DashboardDataService {
         LocalDate ts = end.minusDays(days - 1);
 
         StringBuilder sql = new StringBuilder("SELECT toDate(timestamp) AS date, ").append(aggFn).append(" AS value FROM ").append(EVENTS);
-        sql.append(" WHERE timestamp BETWEEN :t0 AND :t1");
+        sql.append(" WHERE timestamp BETWEEN '").append(start).append("' AND '").append(end.plusDays(1)).append("'");
         if (eventType != null) sql.append(" AND event_type = '").append(esc(eventType)).append("'");
         appendFilters(sql, q);
         sql.append(" GROUP BY date ORDER BY date");
@@ -127,12 +123,12 @@ public class DashboardDataService {
         int limit = q.has("limit") ? q.get("limit").asInt() : 10;
 
         StringBuilder sql = new StringBuilder("SELECT ").append(groupBy).append(" AS dim, ").append(aggFn).append(" AS value FROM ").append(EVENTS);
-        sql.append(" WHERE timestamp BETWEEN :t0 AND :t1");
+        sql.append(" WHERE timestamp BETWEEN '").append(start).append("' AND '").append(end.plusDays(1)).append("'");
         if (eventType != null) sql.append(" AND event_type = '").append(esc(eventType)).append("'");
         appendFilters(sql, q);
         sql.append(" GROUP BY dim ORDER BY value DESC LIMIT ").append(limit);
 
-        List<Map<String, Object>> rows = chJdbc.queryForList(sql.toString(), params(start, end));
+        List<Map<String, Object>> rows = ch.query(sql.toString());
         List<Map<String, Object>> items = new ArrayList<>();
         for (var r : rows) items.add(Map.of("dimension", str(r.get("dim")), "value", r.get("value")));
         return Map.of("rows", items, "groupBy", groupBy);
@@ -144,11 +140,11 @@ public class DashboardDataService {
         int limit = q.has("limit") ? q.get("limit").asInt() : 10;
 
         StringBuilder sql = new StringBuilder("SELECT ").append(groupBy).append(" AS name, ").append(aggFn).append(" AS value FROM ").append(EVENTS);
-        sql.append(" WHERE timestamp BETWEEN :t0 AND :t1");
+        sql.append(" WHERE timestamp BETWEEN '").append(start).append("' AND '").append(end.plusDays(1)).append("'");
         appendFilters(sql, q);
         sql.append(" GROUP BY name ORDER BY value DESC LIMIT ").append(limit);
 
-        List<Map<String, Object>> rows = chJdbc.queryForList(sql.toString(), params(start, end));
+        List<Map<String, Object>> rows = ch.query(sql.toString());
         List<Map<String, Object>> items = new ArrayList<>();
         for (var r : rows) items.add(Map.of("name", str(r.get("name")), "value", r.get("value")));
         return Map.of("items", items);
@@ -171,13 +167,6 @@ public class DashboardDataService {
         for (String f : new String[]{"platform", "device_type", "os", "browser", "utm_source", "utm_medium", "utm_campaign"}) {
             if (q.has(f)) sql.append(" AND ").append(f).append(" = '").append(esc(q.get(f).asText())).append("'");
         }
-    }
-
-    private MapSqlParameterSource params(LocalDate s, LocalDate e) {
-        MapSqlParameterSource p = new MapSqlParameterSource();
-        p.addValue("t0", s.atStartOfDay().toString());
-        p.addValue("t1", e.plusDays(1).atStartOfDay().toString());
-        return p;
     }
 
     private LocalDate parseDate(String d, LocalDate def) {
