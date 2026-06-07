@@ -1,0 +1,44 @@
+package com.gateflow.tracker.config;
+
+import com.clickhouse.jdbc.ClickHouseDataSource;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+
+import javax.sql.DataSource;
+import java.sql.SQLException;
+import java.util.Properties;
+
+@Slf4j
+@Configuration
+public class ClickHouseConfig {
+
+    @Value("${clickhouse.url}")
+    private String url;
+
+    @Value("${clickhouse.username:default}")
+    private String username;
+
+    @Value("${clickhouse.password:}")
+    private String password;
+
+    @Bean(name = "clickHouseDataSource")
+    public DataSource clickHouseDataSource() throws SQLException {
+        Properties props = new Properties();
+        props.setProperty("user", username);
+        if (password != null && !password.isEmpty()) {
+            props.setProperty("password", password);
+        }
+        props.setProperty("connect_timeout", "10000");
+        props.setProperty("socket_timeout", "30000");
+        log.info("Initializing ClickHouse DataSource: {}", url);
+        return new ClickHouseDataSource(url, props);
+    }
+
+    @Bean(name = "clickHouseJdbcTemplate")
+    public NamedParameterJdbcTemplate clickHouseJdbcTemplate(DataSource clickHouseDataSource) {
+        return new NamedParameterJdbcTemplate(clickHouseDataSource);
+    }
+}
