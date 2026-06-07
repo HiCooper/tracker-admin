@@ -7,10 +7,14 @@ import com.gateflow.tracker.domain.entity.TrackerEventAgg;
 import com.gateflow.tracker.repository.TrackerEventAggMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
-import java.util.List;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -19,6 +23,9 @@ import java.util.stream.Collectors;
 public class EventAnalysisService {
 
     private final TrackerEventAggMapper eventAggMapper;
+
+    @Qualifier("clickHouseJdbcTemplate")
+    private final NamedParameterJdbcTemplate chJdbc;
 
     public List<EventAnalysisVO> query(EventAnalysisQueryRequest request) {
         LambdaQueryWrapper<TrackerEventAgg> wrapper = new LambdaQueryWrapper<>();
@@ -77,5 +84,52 @@ public class EventAnalysisService {
         vo.setUserCount(agg.getUserCount());
         vo.setDeviceCount(agg.getDeviceCount());
         return vo;
+    }
+
+    /**
+     * Multi-dimension breakdown: group by specified dimension(s), count events.
+     * Supported dimensions: platform, os, browser, device_type, utm_source, utm_medium, utm_campaign.
+     */
+    public List<Map<String, Object>> breakdown(String groupBy, String eventType,
+                                                LocalDate startDate, LocalDate endDate, int limit) {
+        // Validate dimension — only allow safe column names
+        Set<String> allowedDims = Set.of("platform", "os", "browser", "device_type", "utm_source", "utm_medium", "utm_campaign");
+        String[] dims = groupBy.split(",");
+        for (String d : dims) {
+            if (!allowedDims.contains(d.trim())) {
+                throw new IllegalArgumentException("Unsupported dimension: " + d + ". Allowed: " + allowedDims);
+            }
+        }
+
+        LocalDate start = startDate != null ? startDate : LocalDate.now().minusDays(7);
+        LocalDate end = endDate != null ? endDate : LocalDate.now();
+
+        String dimClause = String.join(", ", dims);
+        StringBuilder sql = new StringBuilder("SELECT ").append(dimClause)
+                .append(", count() AS event_count, count(DISTINCT user_id) AS user_count ")
+                .append("FROM gateflow_tracker.events ")
+                .append("WHERE timestamp BETWEEN :t0 AND :t1 ");
+        if (eventType != null && !eventType.isEmpty()) {
+            sql.append("AND event_type = '").append(eventType.replace("'", "''")).append("' ");
+        }
+        sql.append("GROUP BY ").append(dimClause)
+                .append(" ORDER BY event_count DESC LIMIT ").append(limit);
+
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        params.addValue("t0", start.atStartOfDay().toString());
+        params.addValue("t1", end.plusDays(1).atStartOfDay().toString());
+
+        List<Map<String, Object>> rows = chJdbc.queryForList(sql.toString(), params);
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Map<String, Object> row : rows) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            for (String dim : dims) {
+                item.put(dim.trim(), row.get(dim.trim()));
+            }
+            item.put("event_count", row.get("event_count"));
+            item.put("user_count", row.get("user_count"));
+            result.add(item);
+        }
+        return result;
     }
 }

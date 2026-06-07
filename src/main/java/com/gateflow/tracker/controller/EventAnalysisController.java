@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/event-analysis")
@@ -51,5 +52,17 @@ public class EventAnalysisController {
             @Parameter(description = "天数") @RequestParam(defaultValue = "7") int days) {
         List<EventAnalysisVO> result = eventAnalysisService.getRecentData(days);
         return ResponseEntity.ok(ApiResponse.success(result));
+    }
+
+    @GetMapping("/dimensions")
+    @Operation(summary = "多维度下钻 — 按platform/os/browser/device_type/utm_source分组")
+    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> breakdown(
+            @Parameter(description = "分组维度") @RequestParam(defaultValue = "platform") String groupBy,
+            @Parameter(description = "事件类型") @RequestParam(required = false) String eventType,
+            @Parameter(description = "开始日期") @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @Parameter(description = "结束日期") @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
+            @Parameter(description = "返回数量") @RequestParam(defaultValue = "20") int limit) {
+        return ResponseEntity.ok(ApiResponse.success(
+                eventAnalysisService.breakdown(groupBy, eventType, startDate, endDate, limit)));
     }
 }

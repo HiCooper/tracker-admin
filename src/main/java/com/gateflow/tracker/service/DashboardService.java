@@ -22,6 +22,7 @@ import java.util.stream.Collectors;
 public class DashboardService {
 
     private final TrackerDashboardMapper dashboardMapper;
+    private final DashboardDataService dashboardDataService;
 
     public List<DashboardVO> listDashboards() {
         LambdaQueryWrapper<TrackerDashboard> wrapper = new LambdaQueryWrapper<>();
@@ -78,6 +79,15 @@ public class DashboardService {
             throw new BizException(ErrorCode.DASHBOARD_NOT_FOUND, "Dashboard not found: " + id);
         }
         dashboardMapper.deleteById(id);
+    }
+
+    /** Execute dashboard panels and return live data. */
+    public DashboardDataService.DashboardData getDashboardData(Long id, String startTime, String endTime) {
+        TrackerDashboard db = dashboardMapper.selectById(id);
+        if (db == null) {
+            throw new BizException(ErrorCode.DASHBOARD_NOT_FOUND, "Dashboard not found: " + id);
+        }
+        return dashboardDataService.execute(db.getId(), db.getName(), db.getConfig(), startTime, endTime);
     }
 
     private DashboardVO toVO(TrackerDashboard dashboard) {
