@@ -1,11 +1,9 @@
 package com.gateflow.tracker.service;
 
+import com.gateflow.tracker.config.ClickHouseQueryHelper;
 import com.gateflow.tracker.domain.dto.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -18,8 +16,7 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class AdvancedAnalysisService {
 
-    @Qualifier("clickHouseJdbcTemplate")
-    private final NamedParameterJdbcTemplate chJdbc;
+    private final ClickHouseQueryHelper ch;
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 
@@ -36,21 +33,11 @@ public class AdvancedAnalysisService {
             conditions.add(buildEventCondition(def.getEventType(), def.getEventFilter()));
         }
 
-        String funnelSql = buildWindowFunnelSql(start, end, window, conditions, req.getPlatform());
+        String funnelSql = buildWindowFunnelSql(start, end, window, conditions,
+                req.getPlatform(), req.getAppCode());
         log.debug("Funnel SQL: {}", funnelSql);
 
-        MapSqlParameterSource params = new MapSqlParameterSource();
-        params.addValue("startTime", start.atStartOfDay().toString());
-        params.addValue("endTime", end.plusDays(1).atStartOfDay().toString());
-        params.addValue("window", window);
-
-        List<Map<String, Object>> rows;
-        try {
-            rows = chJdbc.queryForList(funnelSql, params);
-        } catch (Exception e) {
-            log.error("ClickHouse funnel query failed", e);
-            throw new RuntimeException("漏斗分析查询失败: " + e.getMessage(), e);
-        }
+        List<Map<String, Object>> rows = ch.query(funnelSql);
 
         Map<Integer, Long> levelCounts = new LinkedHashMap<>();
         for (int i = 0; i <= stepDefs.size(); i++) {
@@ -95,7 +82,7 @@ public class AdvancedAnalysisService {
                 steps.get(steps.size() - 1).getConversionRate();
 
         List<FunnelResult.FunnelTrendPoint> trend = queryFunnelTrend(start, end, window,
-                conditions, stepDefs, req.getPlatform());
+                conditions, stepDefs, req.getPlatform(), req.getAppCode());
 
         return FunnelResult.builder()
                 .steps(steps)
@@ -118,20 +105,10 @@ public class AdvancedAnalysisService {
                 req.getReturnEvent() != null ? req.getReturnEvent() : "page_view", null);
 
         String retentionSql = buildRetentionSql(start, end, days, initialCondition,
-                returnCondition, req.getPlatform());
+                returnCondition, req.getPlatform(), req.getAppCode());
         log.debug("Retention SQL: {}", retentionSql);
 
-        MapSqlParameterSource params = new MapSqlParameterSource();
-        params.addValue("startTime", start.atStartOfDay().toString());
-        params.addValue("endTime", end.plusDays(1).atStartOfDay().toString());
-
-        List<Map<String, Object>> rows;
-        try {
-            rows = chJdbc.queryForList(retentionSql, params);
-        } catch (Exception e) {
-            log.error("ClickHouse retention query failed", e);
-            throw new RuntimeException("留存分析查询失败: " + e.getMessage(), e);
-        }
+        List<Map<String, Object>> rows = ch.query(retentionSql);
 
         List<RetentionResult.RetentionCohort> cohorts = new ArrayList<>();
         long totalInitialUsers = 0;
@@ -191,32 +168,26 @@ public class AdvancedAnalysisService {
         LocalDate end = parseDate(req.getEndTime(), LocalDate.now());
         int depth = req.getDepth();
         int minCount = req.getMinTransitionCount();
+        int limit = 5000;
 
-        String pathSql = """
-                SELECT
-                    session_id,
-                    groupArray(page_url) AS pages,
-                    count() AS weight
-                FROM gateflow_tracker.events
-                WHERE event_type = 'page_view'
-                  AND timestamp BETWEEN :startTime AND :endTime
-                GROUP BY session_id
-                HAVING length(pages) >= 2
-                ORDER BY weight DESC
-                LIMIT 500
-                """;
-
-        MapSqlParameterSource params = new MapSqlParameterSource();
-        params.addValue("startTime", start.atStartOfDay().toString());
-        params.addValue("endTime", end.plusDays(1).atStartOfDay().toString());
-
-        List<Map<String, Object>> rows;
-        try {
-            rows = chJdbc.queryForList(pathSql, params);
-        } catch (Exception e) {
-            log.error("ClickHouse path query failed", e);
-            throw new RuntimeException("路径分析查询失败: " + e.getMessage(), e);
+        StringBuilder pathSql = new StringBuilder();
+        pathSql.append("SELECT session_id, groupArray(page_url) AS pages, count() AS weight ");
+        pathSql.append("FROM gateflow_tracker.events ");
+        pathSql.append("WHERE event_type = 'page_view' ");
+        pathSql.append("AND timestamp BETWEEN '").append(start).append("' AND '").append(end.plusDays(1)).append("' ");
+        if (req.getAppCode() != null && !req.getAppCode().isEmpty()) {
+            pathSql.append("AND spma = '").append(esc(req.getAppCode())).append("' ");
         }
+        if (req.getPlatform() != null && !req.getPlatform().isEmpty()) {
+            pathSql.append("AND platform = '").append(esc(req.getPlatform())).append("' ");
+        }
+        pathSql.append("GROUP BY session_id ");
+        pathSql.append("HAVING length(pages) >= 2 ");
+        pathSql.append("ORDER BY weight DESC LIMIT ").append(limit);
+
+        log.debug("Path SQL: {}", pathSql);
+
+        List<Map<String, Object>> rows = ch.query(pathSql.toString());
 
         Map<String, Map<String, Integer>> transitionCounts = new LinkedHashMap<>();
         Map<String, Integer> nodeCounts = new LinkedHashMap<>();
@@ -321,15 +292,30 @@ public class AdvancedAnalysisService {
 
     private String buildEventCondition(String eventType, String filter) {
         StringBuilder sb = new StringBuilder();
-        sb.append("event_type = '").append(eventType.replace("'", "''")).append("'");
+        sb.append("event_type = '").append(esc(eventType)).append("'");
         if (filter != null && !filter.isEmpty()) {
             sb.append(" AND ").append(filter);
         }
         return sb.toString();
     }
 
+    private String buildWhereClause(LocalDate start, LocalDate end,
+                                     String platform, String appCode) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("timestamp BETWEEN '").append(start).append("' AND '")
+                .append(end.plusDays(1)).append("'");
+        if (platform != null && !platform.isEmpty()) {
+            sb.append(" AND platform = '").append(esc(platform)).append("'");
+        }
+        if (appCode != null && !appCode.isEmpty()) {
+            sb.append(" AND spma = '").append(esc(appCode)).append("'");
+        }
+        return sb.toString();
+    }
+
     private String buildWindowFunnelSql(LocalDate start, LocalDate end, int window,
-                                        List<String> conditions, String platform) {
+                                        List<String> conditions, String platform, String appCode) {
+        String where = buildWhereClause(start, end, platform, appCode);
         StringBuilder sb = new StringBuilder();
         sb.append("SELECT level, count(DISTINCT user_id) AS users FROM (");
         sb.append("  SELECT user_id, windowFunnel(").append(window)
@@ -337,10 +323,7 @@ public class AdvancedAnalysisService {
         sb.append(String.join(", ", conditions));
         sb.append(") AS level ");
         sb.append("  FROM gateflow_tracker.events ");
-        sb.append("  WHERE timestamp BETWEEN :startTime AND :endTime ");
-        if (platform != null && !platform.isEmpty()) {
-            sb.append("    AND platform = '").append(platform.replace("'", "''")).append("' ");
-        }
+        sb.append("  WHERE ").append(where);
         sb.append("  GROUP BY user_id");
         sb.append(") GROUP BY level ORDER BY level");
         return sb.toString();
@@ -349,19 +332,16 @@ public class AdvancedAnalysisService {
     private List<FunnelResult.FunnelTrendPoint> queryFunnelTrend(
             LocalDate start, LocalDate end, int window,
             List<String> conditions, List<FunnelRequest.FunnelStepDef> stepDefs,
-            String platform) {
+            String platform, String appCode) {
         List<FunnelResult.FunnelTrendPoint> trend = new ArrayList<>();
         LocalDate current = start;
         while (!current.isAfter(end)) {
             LocalDate dayStart = current;
             LocalDate dayEnd = current.plusDays(1);
-            String trendSql = buildWindowFunnelSql(dayStart, dayEnd, window, conditions, platform);
-            MapSqlParameterSource p = new MapSqlParameterSource();
-            p.addValue("startTime", dayStart.atStartOfDay().toString());
-            p.addValue("endTime", dayEnd.atStartOfDay().toString());
-            p.addValue("window", window);
+            String trendSql = buildWindowFunnelSql(dayStart, dayEnd, window, conditions,
+                    platform, appCode);
             try {
-                List<Map<String, Object>> rows = chJdbc.queryForList(trendSql, p);
+                List<Map<String, Object>> rows = ch.query(trendSql);
                 Map<Integer, Long> levelCounts = new HashMap<>();
                 for (Map<String, Object> row : rows) {
                     levelCounts.put(((Number) row.get("level")).intValue(),
@@ -391,16 +371,14 @@ public class AdvancedAnalysisService {
 
     private String buildRetentionSql(LocalDate start, LocalDate end, List<Integer> days,
                                      String initialCondition, String returnCondition,
-                                     String platform) {
+                                     String platform, String appCode) {
+        String where = buildWhereClause(start, end, platform, appCode);
         StringBuilder sb = new StringBuilder();
         sb.append("WITH initial_users AS (");
         sb.append("  SELECT user_id, min(toDate(timestamp)) AS cohort_date ");
         sb.append("  FROM gateflow_tracker.events ");
-        sb.append("  WHERE timestamp BETWEEN :startTime AND :endTime ");
+        sb.append("  WHERE ").append(where);
         sb.append("    AND ").append(initialCondition);
-        if (platform != null && !platform.isEmpty()) {
-            sb.append("    AND platform = '").append(platform.replace("'", "''")).append("' ");
-        }
         sb.append("  GROUP BY user_id ");
         sb.append(") ");
         sb.append("SELECT i.cohort_date, count() AS initial_users");
@@ -411,8 +389,12 @@ public class AdvancedAnalysisService {
         }
         sb.append(" FROM initial_users i ");
         sb.append("LEFT JOIN gateflow_tracker.events e ON e.user_id = i.user_id ");
-        sb.append(" AND e.timestamp BETWEEN :startTime AND :endTime ");
-        sb.append("WHERE i.cohort_date >= :startTime ");
+        sb.append(" AND e.timestamp BETWEEN '").append(start).append("' AND '")
+                .append(end.plusDays(1)).append("' ");
+        if (appCode != null && !appCode.isEmpty()) {
+            sb.append(" AND e.spma = '").append(esc(appCode)).append("' ");
+        }
+        sb.append("WHERE i.cohort_date >= '").append(start).append("' ");
         sb.append("GROUP BY i.cohort_date ORDER BY i.cohort_date");
         return sb.toString();
     }
@@ -431,5 +413,10 @@ public class AdvancedAnalysisService {
                 .filter(c -> c.getDay() == day)
                 .map(RetentionResult.RetentionCurvePoint::getRate)
                 .findFirst().orElse(0.0);
+    }
+
+    private static String esc(String s) {
+        if (s == null) return "";
+        return s.replace("'", "''").replace("\\", "\\\\");
     }
 }

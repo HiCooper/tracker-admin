@@ -30,6 +30,11 @@ spring:
     locations: classpath:db/migration
     baseline-on-migrate: true
     baseline-version: 0
+
+# JWT Configuration
+jwt:
+  secret: ${JWT_SECRET:GateFlowTrackerJwtSecretKey2026!!}
+  expiration-ms: 86400000
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -68,7 +73,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,metrics
   endpoint:
     health:
       show-details: always

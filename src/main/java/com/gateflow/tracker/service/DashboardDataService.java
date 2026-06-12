@@ -102,7 +102,6 @@ public class DashboardDataService {
         String aggFn = agg(q);
         String eventType = q.has("eventType") ? q.get("eventType").asText() : null;
         int days = q.has("days") ? q.get("days").asInt() : 7;
-        LocalDate ts = end.minusDays(days - 1);
 
         StringBuilder sql = new StringBuilder("SELECT toDate(timestamp) AS date, ").append(aggFn).append(" AS value FROM ").append(EVENTS);
         sql.append(" WHERE timestamp BETWEEN '").append(start).append("' AND '").append(end.plusDays(1)).append("'");
@@ -110,7 +109,7 @@ public class DashboardDataService {
         appendFilters(sql, q);
         sql.append(" GROUP BY date ORDER BY date");
 
-        List<Map<String, Object>> rows = chJdbc.queryForList(sql.toString(), params(ts, end));
+        List<Map<String, Object>> rows = ch.query(sql.toString());
         List<Map<String, Object>> pts = new ArrayList<>();
         for (var r : rows) pts.add(Map.of("date", str(r.get("date")), "value", r.get("value")));
         return Map.of("points", pts);
