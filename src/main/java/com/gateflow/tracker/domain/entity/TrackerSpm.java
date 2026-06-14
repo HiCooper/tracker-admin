@@ -32,12 +32,6 @@ public class TrackerSpm {
     @TableField("description")
     private String description;
 
-    @TableField("app_key")
-    private String appKey;
-
-    @TableField("app_secret")
-    private String appSecret;
-
     @TableField("status")
     private Integer status;
 
