@@ -31,7 +31,8 @@ spring:
     baseline-on-migrate: true
     baseline-version: 0
     validate-on-migrate: false
-    repair-on-migrate: true
+    connect-retries: 10
+    clean-disabled: true
   data:
     redis:
       host: ${REDIS_HOST:localhost}
