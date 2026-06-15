@@ -38,7 +38,8 @@ public class JwtAuthFilter implements Filter {
             "/swagger",
             "/v3/api-docs",
             "/actuator",
-            "/error"
+            "/error",
+            "/api/v1/internal"   // 仅 tracker-service 内网调用
     );
 
     @Override
