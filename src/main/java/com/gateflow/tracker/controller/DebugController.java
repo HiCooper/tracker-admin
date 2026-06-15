@@ -7,6 +7,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import com.gateflow.tracker.security.RequireRole;
 
 import java.util.Map;
 import java.util.UUID;
@@ -27,6 +28,7 @@ public class DebugController {
         return ResponseEntity.ok(ApiResponse.success(Map.of("sessionId", sessionId)));
     }
 
+    @RequireRole("admin")
     @DeleteMapping("/sessions/{sessionId}")
     @Operation(summary = "结束调试会话")
     public ResponseEntity<ApiResponse<Void>> endSession(@PathVariable String sessionId) {

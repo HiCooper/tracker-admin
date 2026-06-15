@@ -9,6 +9,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import com.gateflow.tracker.security.RequireRole;
 
 import java.util.List;
 
@@ -48,6 +49,7 @@ public class DashboardController {
         return ResponseEntity.ok(ApiResponse.success(dashboardService.updateDashboard(id, request)));
     }
 
+    @RequireRole("admin")
     @DeleteMapping("/{id}")
     @Operation(summary = "删除看板")
     public ResponseEntity<ApiResponse<Void>> deleteDashboard(

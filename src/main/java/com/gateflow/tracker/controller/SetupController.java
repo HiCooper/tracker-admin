@@ -9,6 +9,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import com.gateflow.tracker.security.RequireRole;
 
 import java.util.List;
 
@@ -42,6 +43,7 @@ public class SetupController {
         return ResponseEntity.ok(ApiResponse.success(setupService.createApp(request)));
     }
 
+    @RequireRole("admin")
     @DeleteMapping("/apps/{id}")
     @Operation(summary = "删除应用")
     public ResponseEntity<ApiResponse<Void>> deleteApp(
@@ -67,6 +69,7 @@ public class SetupController {
         return ResponseEntity.ok(ApiResponse.success(setupService.createPage(appId, request)));
     }
 
+    @RequireRole("admin")
     @DeleteMapping("/pages/{id}")
     @Operation(summary = "删除页面")
     public ResponseEntity<ApiResponse<Void>> deletePage(
@@ -92,6 +95,7 @@ public class SetupController {
         return ResponseEntity.ok(ApiResponse.success(setupService.createBlock(pageId, request)));
     }
 
+    @RequireRole("admin")
     @DeleteMapping("/blocks/{id}")
     @Operation(summary = "删除模块")
     public ResponseEntity<ApiResponse<Void>> deleteBlock(
@@ -117,6 +121,7 @@ public class SetupController {
         return ResponseEntity.ok(ApiResponse.success(setupService.createFunction(blockId, request)));
     }
 
+    @RequireRole("admin")
     @DeleteMapping("/functions/{id}")
     @Operation(summary = "删除功能")
     public ResponseEntity<ApiResponse<Void>> deleteFunction(

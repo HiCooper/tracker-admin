@@ -9,6 +9,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import com.gateflow.tracker.security.RequireRole;
 
 import java.util.List;
 
@@ -34,6 +35,7 @@ public class PropertyController {
         return ResponseEntity.ok(ApiResponse.success(propertyService.createProperty(request)));
     }
 
+    @RequireRole("admin")
     @DeleteMapping("/properties/{id}")
     @Operation(summary = "删除属性")
     public ResponseEntity<ApiResponse<Void>> deleteProperty(

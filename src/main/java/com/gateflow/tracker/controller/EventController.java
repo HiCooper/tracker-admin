@@ -9,6 +9,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import com.gateflow.tracker.security.RequireRole;
 
 @Tag(name = "Event API", description = "事件管理接口")
 @RestController
@@ -50,6 +51,7 @@ public class EventController {
         return ResponseEntity.ok(ApiResponse.success(eventService.updateEvent(id, request)));
     }
 
+    @RequireRole("admin")
     @DeleteMapping("/{id}")
     @Operation(summary = "删除事件")
     public ResponseEntity<ApiResponse<Void>> deleteEvent(
