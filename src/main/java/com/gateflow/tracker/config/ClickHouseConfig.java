@@ -29,6 +29,9 @@ public class ClickHouseConfig {
         }
         p.setProperty("socket_timeout", "30000");
         p.setProperty("connection_timeout", "10000");
+        // 与 tracker-service 写入侧一致,统一按 UTC 解释 DateTime,避免聚合按本地时区偏移。
+        p.setProperty("use_server_time_zone", "false");
+        p.setProperty("use_time_zone", "UTC");
         return new ClickHouseDataSource(props.getUrl(), p);
     }
 

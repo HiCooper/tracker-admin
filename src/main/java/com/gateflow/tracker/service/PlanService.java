@@ -51,14 +51,14 @@ public class PlanService {
 
     // ---- Create ----
     @Transactional(rollbackFor = Exception.class)
-    public PlanVO createPlan(CreatePlanRequest req) {
+    public PlanVO createPlan(CreatePlanRequest req, String submitter) {
         TrackerPlan p = new TrackerPlan();
         p.setPlanName(req.getPlanName());
         p.setAppId(req.getAppId());
         p.setAppName(req.getAppName() != null ? req.getAppName() : "");
         p.setAppVersion(req.getAppVersion());
         p.setStatus("draft");
-        p.setSubmitter("");
+        p.setSubmitter(submitter != null ? submitter : "");
         p.setReviewer("");
         p.setReviewComment("");
         p.setEventsJson(toJson(req.getEvents()));
@@ -95,11 +95,14 @@ public class PlanService {
 
     // ---- Submit for Review ----
     @Transactional(rollbackFor = Exception.class)
-    public PlanVO submitForReview(Long id) {
+    public PlanVO submitForReview(Long id, String submitter) {
         TrackerPlan p = planMapper.selectById(id);
         if (p == null) throw new BizException(ErrorCode.PLAN_NOT_FOUND, "Plan not found: " + id);
         if (!"draft".equals(p.getStatus()) && !"rejected".equals(p.getStatus())) {
             throw new BizException(ErrorCode.PLAN_STATUS_INVALID, "Only draft/rejected plans can be submitted");
+        }
+        if (submitter != null && !submitter.isBlank()) {
+            p.setSubmitter(submitter);
         }
         p.setStatus("reviewing");
         planMapper.updateById(p);
@@ -109,7 +112,7 @@ public class PlanService {
 
     // ---- Review ----
     @Transactional(rollbackFor = Exception.class)
-    public PlanVO reviewPlan(Long id, ReviewPlanRequest req) {
+    public PlanVO reviewPlan(Long id, ReviewPlanRequest req, String reviewer) {
         TrackerPlan p = planMapper.selectById(id);
         if (p == null) throw new BizException(ErrorCode.PLAN_NOT_FOUND, "Plan not found: " + id);
         if (!"reviewing".equals(p.getStatus())) {
@@ -122,7 +125,7 @@ public class PlanService {
         } else {
             throw new BizException(ErrorCode.PARAM_INVALID, "Action must be 'approve' or 'reject'");
         }
-        p.setReviewer(""); // TODO: get from JWT
+        p.setReviewer(reviewer != null ? reviewer : "");
         p.setReviewComment(req.getComment() != null ? req.getComment() : "");
         planMapper.updateById(p);
         log.info("Plan reviewed: id={}, action={}", id, req.getAction());

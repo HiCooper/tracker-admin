@@ -24,6 +24,7 @@ public class ErrorCode {
     public static final Integer AUTH_ACCOUNT_DISABLED = 4002;
     public static final Integer AUTH_TOKEN_EXPIRED = 4003;
     public static final Integer AUTH_TOKEN_INVALID = 4004;
+    public static final Integer AUTH_FORBIDDEN = 4005;
 
     // 服务器错误 (5000-5999)
     public static final Integer INTERNAL_ERROR = 5001;

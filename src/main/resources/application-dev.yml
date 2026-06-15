@@ -12,6 +12,11 @@ clickhouse:
   username: default
   password: ""
 
+# 仅本地开发使用的 JWT 密钥(>=32 字节);生产必须经 JWT_SECRET 注入
+gateflow:
+  jwt:
+    secret: ${JWT_SECRET:dev-only-gateflow-jwt-secret-key-change-me-32B}
+
 logging:
   level:
     com.gateflow.tracker: DEBUG

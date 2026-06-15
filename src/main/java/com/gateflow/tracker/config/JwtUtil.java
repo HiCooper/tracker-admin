@@ -15,15 +15,18 @@ public class JwtUtil {
     private final SecretKey key;
     private final long expirationMs;
 
-    public JwtUtil(@Value("${gateflow.jwt.secret:gateflow-default-jwt-secret-key-min-32-chars!!}") String secret,
+    public JwtUtil(@Value("${gateflow.jwt.secret:}") String secret,
                    @Value("${gateflow.jwt.expiration-ms:86400000}") long expirationMs) {
-        // Ensure key is at least 256 bits (32 bytes) for HS256
+        // 强制要求通过环境变量(JWT_SECRET)提供强密钥;缺失或过弱则启动失败,
+        // 杜绝此前「硬编码默认值 + 静默补齐」导致的可伪造 token 漏洞。
+        if (secret == null || secret.isBlank()) {
+            throw new IllegalStateException(
+                    "JWT secret 未配置:请通过环境变量 JWT_SECRET (gateflow.jwt.secret) 设置至少 32 字节的强密钥");
+        }
         byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
         if (keyBytes.length < 32) {
-            // Pad or warn — for production, always set a strong secret via env
-            byte[] padded = new byte[32];
-            System.arraycopy(keyBytes, 0, padded, 0, Math.min(keyBytes.length, 32));
-            keyBytes = padded;
+            throw new IllegalStateException(
+                    "JWT secret 过弱:HS256 要求至少 32 字节(256 位),当前 " + keyBytes.length + " 字节");
         }
         this.key = Keys.hmacShaKeyFor(keyBytes);
         this.expirationMs = expirationMs;

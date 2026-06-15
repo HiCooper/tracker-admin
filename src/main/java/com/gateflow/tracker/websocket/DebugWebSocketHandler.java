@@ -10,8 +10,6 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Component
@@ -39,21 +37,19 @@ public class DebugWebSocketHandler extends TextWebSocketHandler {
         if (isViewer) {
             viewers.computeIfAbsent(sessionId, k -> ConcurrentHashMap.newKeySet()).add(session);
             log.info("Viewer connected: sessionId={}", sessionId);
-            
-            // Send connected event after a brief delay
+
             sendJson(session, Map.of("type", "viewer_ready", "sessionId", sessionId));
-            
-            // Simulate device connected after 2s, then send mock events
-            Executors.newSingleThreadScheduledExecutor().schedule(() -> {
-                if (viewers.containsKey(sessionId)) {
-                    sendJson(session, Map.of("type", "device_connected", "sessionId", sessionId));
-                }
-            }, 2, TimeUnit.SECONDS);
-            
+
+            // 若该会话的 SDK 已在线,立即告知观看端设备已连接(此前用每连接新建的
+            // ScheduledExecutorService 发送 mock 事件,既泄漏线程又是假数据,已移除)。
+            if (sdkSessions.containsKey(sessionId)) {
+                sendJson(session, Map.of("type", "device_connected", "sessionId", sessionId));
+            }
+
         } else if (isSdk) {
             sdkSessions.put(sessionId, session);
             log.info("SDK connected: sessionId={}", sessionId);
-            
+
             // Notify viewers that device connected
             for (WebSocketSession vs : viewers.getOrDefault(sessionId, Collections.emptySet())) {
                 sendJson(vs, Map.of("type", "device_connected", "sessionId", sessionId));

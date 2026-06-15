@@ -1,6 +1,7 @@
 package com.gateflow.tracker.controller;
 
 import com.gateflow.tracker.domain.dto.*;
+import com.gateflow.tracker.security.RequireRole;
 import com.gateflow.tracker.service.PlanService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -37,8 +38,9 @@ public class PlanController {
     @PostMapping
     @Operation(summary = "创建方案")
     public ResponseEntity<ApiResponse<PlanVO>> createPlan(
-            @Valid @RequestBody CreatePlanRequest request) {
-        return ResponseEntity.ok(ApiResponse.success(planService.createPlan(request)));
+            @Valid @RequestBody CreatePlanRequest request,
+            @RequestAttribute(value = "username", required = false) String username) {
+        return ResponseEntity.ok(ApiResponse.success(planService.createPlan(request, username)));
     }
 
     @PutMapping("/{id}")
@@ -50,6 +52,7 @@ public class PlanController {
     }
 
     @DeleteMapping("/{id}")
+    @RequireRole("admin")
     @Operation(summary = "删除方案")
     public ResponseEntity<ApiResponse<Void>> deletePlan(
             @Parameter(description = "方案ID") @PathVariable Long id) {
@@ -60,19 +63,23 @@ public class PlanController {
     @PostMapping("/{id}/submit")
     @Operation(summary = "提交审核")
     public ResponseEntity<ApiResponse<PlanVO>> submitForReview(
-            @Parameter(description = "方案ID") @PathVariable Long id) {
-        return ResponseEntity.ok(ApiResponse.success(planService.submitForReview(id)));
+            @Parameter(description = "方案ID") @PathVariable Long id,
+            @RequestAttribute(value = "username", required = false) String username) {
+        return ResponseEntity.ok(ApiResponse.success(planService.submitForReview(id, username)));
     }
 
     @PostMapping("/{id}/review")
+    @RequireRole("admin")
     @Operation(summary = "审核方案")
     public ResponseEntity<ApiResponse<PlanVO>> reviewPlan(
             @Parameter(description = "方案ID") @PathVariable Long id,
-            @Valid @RequestBody ReviewPlanRequest request) {
-        return ResponseEntity.ok(ApiResponse.success(planService.reviewPlan(id, request)));
+            @Valid @RequestBody ReviewPlanRequest request,
+            @RequestAttribute(value = "username", required = false) String username) {
+        return ResponseEntity.ok(ApiResponse.success(planService.reviewPlan(id, request, username)));
     }
 
     @PostMapping("/{id}/online")
+    @RequireRole("admin")
     @Operation(summary = "上线方案")
     public ResponseEntity<ApiResponse<PlanVO>> goOnline(
             @Parameter(description = "方案ID") @PathVariable Long id) {

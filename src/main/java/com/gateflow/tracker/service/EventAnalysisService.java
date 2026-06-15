@@ -1,81 +1,98 @@
 package com.gateflow.tracker.service;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.gateflow.tracker.config.ClickHouseConfig;
+import com.gateflow.tracker.config.ClickHouseConfig.ClickHouseProperties;
 import com.gateflow.tracker.domain.dto.EventAnalysisQueryRequest;
 import com.gateflow.tracker.domain.dto.EventAnalysisVO;
-import com.gateflow.tracker.domain.entity.TrackerEventAgg;
-import com.gateflow.tracker.repository.TrackerEventAggMapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
 
+/**
+ * 事件分析:直接查询 ClickHouse 明细聚合(结构修正 B)。
+ *
+ * <p>此前查询的 MySQL {@code tracker_event_agg} 从无 @Scheduled 写入(空转),导致分析页恒空。
+ * 现统一以 ClickHouse 为分析存储,实时聚合 {@code gateflow_tracker.events}。
+ */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class EventAnalysisService {
 
-    private final TrackerEventAggMapper eventAggMapper;
+    private static final int DEFAULT_RANGE_DAYS = 30;
+    private final DataSource chDataSource;
+
+    public EventAnalysisService(ClickHouseProperties chProps) {
+        DataSource ds;
+        try {
+            ds = ClickHouseConfig.createDataSource(chProps);
+        } catch (Exception e) {
+            log.warn("Failed to create ClickHouse DataSource, event analysis will return empty: {}", e.getMessage());
+            ds = null;
+        }
+        this.chDataSource = ds;
+    }
 
     public List<EventAnalysisVO> query(EventAnalysisQueryRequest request) {
-        LambdaQueryWrapper<TrackerEventAgg> wrapper = new LambdaQueryWrapper<>();
-        
-        // 日期范围过滤
-        if (request.getStartDate() != null) {
-            wrapper.ge(TrackerEventAgg::getDate, request.getStartDate());
-        }
-        if (request.getEndDate() != null) {
-            wrapper.le(TrackerEventAgg::getDate, request.getEndDate());
-        }
-        
-        // 事件类型过滤 (eventKey -> eventType)
-        if (request.getEventKey() != null && !request.getEventKey().isEmpty()) {
-            wrapper.like(TrackerEventAgg::getEventType, request.getEventKey());
-        }
-        
-        // 平台过滤
-        if (request.getPlatform() != null && !request.getPlatform().isEmpty()) {
-            wrapper.eq(TrackerEventAgg::getPlatform, request.getPlatform());
-        }
-        
-        // 按日期和小时降序排序
-        wrapper.orderByDesc(TrackerEventAgg::getDate)
-               .orderByDesc(TrackerEventAgg::getHour);
-        
-        // 限制返回数量
-        wrapper.last("LIMIT 1000");
-        
-        List<TrackerEventAgg> results = eventAggMapper.selectList(wrapper);
-        
-        return results.stream().map(this::toVO).collect(Collectors.toList());
+        LocalDate end = request.getEndDate() != null ? request.getEndDate() : LocalDate.now();
+        LocalDate start = request.getStartDate() != null ? request.getStartDate() : end.minusDays(DEFAULT_RANGE_DAYS);
+        return runQuery(start, end, request.getEventKey(), request.getPlatform(), 1000);
     }
 
     public List<EventAnalysisVO> getRecentData(int days) {
-        LocalDate endDate = LocalDate.now();
-        LocalDate startDate = endDate.minusDays(days);
-        
-        LambdaQueryWrapper<TrackerEventAgg> wrapper = new LambdaQueryWrapper<>();
-        wrapper.ge(TrackerEventAgg::getDate, startDate);
-        wrapper.le(TrackerEventAgg::getDate, endDate);
-        wrapper.orderByDesc(TrackerEventAgg::getDate);
-        wrapper.last("LIMIT 100");
-        
-        List<TrackerEventAgg> results = eventAggMapper.selectList(wrapper);
-        return results.stream().map(this::toVO).collect(Collectors.toList());
+        LocalDate end = LocalDate.now();
+        return runQuery(end.minusDays(days), end, null, null, 100);
     }
 
-    private EventAnalysisVO toVO(TrackerEventAgg agg) {
-        EventAnalysisVO vo = new EventAnalysisVO();
-        vo.setDate(agg.getDate());
-        vo.setHour(agg.getHour());
-        vo.setPlatform(agg.getPlatform());
-        vo.setEventType(agg.getEventType());
-        vo.setEventCount(agg.getEventCount());
-        vo.setUserCount(agg.getUserCount());
-        vo.setDeviceCount(agg.getDeviceCount());
-        return vo;
+    private List<EventAnalysisVO> runQuery(LocalDate start, LocalDate end,
+                                           String eventKey, String platform, int limit) {
+        if (chDataSource == null) {
+            return List.of();
+        }
+        StringBuilder sql = new StringBuilder(
+                "SELECT toDate(timestamp) AS d, toHour(timestamp) AS h, platform, event_type, " +
+                "count() AS event_count, uniqExact(user_id) AS user_count, uniqExact(anonymous_id) AS device_count " +
+                "FROM gateflow_tracker.events " +
+                "WHERE timestamp >= ? AND timestamp < ? ");
+        boolean hasEventKey = StringUtils.hasText(eventKey);
+        boolean hasPlatform = StringUtils.hasText(platform);
+        if (hasEventKey) sql.append("AND event_type LIKE ? ");
+        if (hasPlatform) sql.append("AND platform = ? ");
+        sql.append("GROUP BY d, h, platform, event_type ORDER BY d DESC, h DESC LIMIT ").append(limit);
+
+        List<EventAnalysisVO> result = new ArrayList<>();
+        try (Connection conn = chDataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql.toString())) {
+            int i = 1;
+            stmt.setString(i++, start.atStartOfDay().toString().replace('T', ' '));
+            stmt.setString(i++, end.plusDays(1).atStartOfDay().toString().replace('T', ' '));
+            if (hasEventKey) stmt.setString(i++, "%" + eventKey + "%");
+            if (hasPlatform) stmt.setString(i++, platform);
+
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    EventAnalysisVO vo = new EventAnalysisVO();
+                    vo.setDate(LocalDate.parse(rs.getString("d")));
+                    vo.setHour(rs.getInt("h"));
+                    vo.setPlatform(rs.getString("platform"));
+                    vo.setEventType(rs.getString("event_type"));
+                    vo.setEventCount(rs.getLong("event_count"));
+                    vo.setUserCount(rs.getLong("user_count"));
+                    vo.setDeviceCount(rs.getLong("device_count"));
+                    result.add(vo);
+                }
+            }
+        } catch (Exception e) {
+            log.error("ClickHouse event analysis query failed: {}", e.getMessage(), e);
+            return List.of();
+        }
+        return result;
     }
 }

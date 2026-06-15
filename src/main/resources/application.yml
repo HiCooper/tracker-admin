@@ -47,6 +47,22 @@ clickhouse:
   username: ${CLICKHOUSE_USER:default}
   password: ${CLICKHOUSE_PASSWORD:}
 
+# GateFlow 安全配置
+gateflow:
+  jwt:
+    # 必填:通过环境变量 JWT_SECRET 提供 >=32 字节强密钥(缺失则启动失败);与 tracker-service 共享
+    secret: ${JWT_SECRET:}
+    expiration-ms: ${JWT_EXPIRATION_MS:86400000}
+  admin:
+    # 可选:首启初始 admin 密码;未设置则随机生成并在日志打印一次
+    initial-password: ${ADMIN_INITIAL_PASSWORD:}
+  websocket:
+    # 调试 WebSocket 允许的来源白名单(逗号分隔);默认仅本地前端
+    allowed-origins: ${WS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
+  cors:
+    # HTTP CORS 允许的来源白名单(逗号分隔)
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
+
 mybatis-plus:
   mapper-locations: classpath*:mapper/**/*.xml
   type-aliases-package: com.gateflow.tracker.domain.entity
