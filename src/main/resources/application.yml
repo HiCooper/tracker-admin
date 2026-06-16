@@ -99,3 +99,8 @@ springdoc:
   swagger-ui:
     path: /swagger-ui.html
     enabled: true
+
+logging:
+  pattern:
+    # 在日志级别字段后附加请求关联 ID(由 RequestIdFilter 写入 MDC)
+    level: "%5p [${spring.application.name:tracker-admin},%X{requestId:-}]"
