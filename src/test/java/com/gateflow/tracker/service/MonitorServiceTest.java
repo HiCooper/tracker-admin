@@ -18,23 +18,32 @@ class MonitorServiceTest {
     }
 
     @Test
-    void parseDlqSizeExtractsLeadingNumber() {
+    void parsesStructuredPipelineSection() {
         MonitorService s = service("");
-        assertThat(s.parseDlqSize("{\"services\":{\"dlq\":\"12 entries\"}}")).isEqualTo(12L);
-        assertThat(s.parseDlqSize("{\"services\":{\"dlq\":\"0 entries\"}}")).isEqualTo(0L);
+        Map<String, Object> p = s.parseCollectorPipeline(
+                "{\"pipeline\":{\"dlqSize\":12,\"dedupHitRate\":0.75}}");
+        assertThat(p).containsEntry("dlqSize", 12L).containsEntry("dedupHitRate", 0.75);
     }
 
     @Test
-    void parseDlqSizeReturnsNullWhenMissingOrInvalid() {
+    void fallsBackToLegacyServicesDlqString() {
         MonitorService s = service("");
-        assertThat(s.parseDlqSize("{\"services\":{}}")).isNull();
-        assertThat(s.parseDlqSize("not json")).isNull();
-        assertThat(s.parseDlqSize("{\"services\":{\"dlq\":\"n/a\"}}")).isNull();
+        Map<String, Object> p = s.parseCollectorPipeline("{\"services\":{\"dlq\":\"7 entries\"}}");
+        assertThat(p).containsEntry("dlqSize", 7L);
+        assertThat(p).doesNotContainKey("dedupHitRate");
     }
 
     @Test
-    void fetchDlqSizeReturnsNullWhenNoBaseUrlConfigured() {
-        assertThat(service("").fetchDlqSizeFromCollector()).isNull();
+    void parseCollectorPipelineReturnsNullWhenMissingOrInvalid() {
+        MonitorService s = service("");
+        assertThat(s.parseCollectorPipeline("{\"services\":{}}")).isNull();
+        assertThat(s.parseCollectorPipeline("not json")).isNull();
+        assertThat(s.parseCollectorPipeline("{\"services\":{\"dlq\":\"n/a\"}}")).isNull();
+    }
+
+    @Test
+    void fetchCollectorPipelineReturnsNullWhenNoBaseUrlConfigured() {
+        assertThat(service("").fetchCollectorPipeline()).isNull();
     }
 
     @Test

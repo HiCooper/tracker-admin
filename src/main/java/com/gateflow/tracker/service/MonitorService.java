@@ -82,13 +82,13 @@ public class MonitorService {
         m.put("eventsPerMinute", epm);
         m.put("available", rows != null);
 
-        Long dlq = fetchDlqSizeFromCollector();
-        m.put("dlqSize", dlq);
-        m.put("dlqAvailable", dlq != null);
-        // 以下指标归属采集服务且暂未对管理端暴露,显式标注未采集而非编造
-        m.put("dedupRate", null);
+        // 采集侧指标(DLQ 积压 / 去重命中率)来自 tracker-service /health 的 pipeline 段
+        Map<String, Object> collector = fetchCollectorPipeline();
+        m.put("dlqSize", collector == null ? null : collector.get("dlqSize"));
+        m.put("dedupRate", collector == null ? null : collector.get("dedupHitRate"));
+        m.put("collectorMetricsAvailable", collector != null);
+        // Kafka 消费 lag 暂无来源(采集服务未暴露),显式标注未采集
         m.put("kafkaLag", null);
-        m.put("collectorMetricsAvailable", false);
         return m;
     }
 
@@ -141,7 +141,8 @@ public class MonitorService {
 
     // ── helpers ──
 
-    Long fetchDlqSizeFromCollector() {
+    /** 拉取采集服务 /health 的 pipeline 段(dlqSize/dedupHitRate);未配置或失败返回 null。 */
+    Map<String, Object> fetchCollectorPipeline() {
         if (trackerServiceBaseUrl.isEmpty()) return null;
         try {
             HttpRequest req = HttpRequest.newBuilder()
@@ -149,21 +150,37 @@ public class MonitorService {
                     .timeout(Duration.ofSeconds(2)).GET().build();
             HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() / 100 != 2 && resp.statusCode() != 503) return null;
-            return parseDlqSize(resp.body());
+            return parseCollectorPipeline(resp.body());
         } catch (Exception e) {
             log.debug("collector /health fetch failed: {}", e.getMessage());
             return null;
         }
     }
 
-    /** 解析采集服务 /health 中的 services.dlq(形如 "12 entries")。 */
-    Long parseDlqSize(String healthJson) {
+    /**
+     * 解析采集服务 /health:优先取结构化 pipeline.{dlqSize,dedupHitRate};
+     * 兼容旧版仅有 services.dlq("12 entries")的情况。返回 null 表示无可用数据。
+     */
+    Map<String, Object> parseCollectorPipeline(String healthJson) {
         try {
-            JsonNode dlq = objectMapper.readTree(healthJson).path("services").path("dlq");
-            if (dlq.isMissingNode()) return null;
-            String text = dlq.asText("");
+            JsonNode root = objectMapper.readTree(healthJson);
+            JsonNode pipeline = root.path("pipeline");
+            Map<String, Object> out = new LinkedHashMap<>();
+            if (pipeline.isObject() && pipeline.has("dlqSize")) {
+                out.put("dlqSize", pipeline.path("dlqSize").asLong());
+                if (pipeline.has("dedupHitRate")) {
+                    out.put("dedupHitRate", pipeline.path("dedupHitRate").asDouble());
+                }
+                return out;
+            }
+            // 向后兼容:services.dlq = "N entries"
+            String text = root.path("services").path("dlq").asText("");
             String digits = text.replaceAll("[^0-9].*$", "");
-            return digits.isEmpty() ? null : Long.parseLong(digits);
+            if (!digits.isEmpty()) {
+                out.put("dlqSize", Long.parseLong(digits));
+                return out;
+            }
+            return null;
         } catch (Exception e) {
             return null;
         }
