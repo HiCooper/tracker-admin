@@ -49,6 +49,9 @@ clickhouse:
 
 # GateFlow 安全配置
 gateflow:
+  # 采集服务地址,用于监控页拉取 DLQ 等采集侧指标(留空则该项标记为未采集)
+  tracker-service:
+    base-url: ${TRACKER_SERVICE_BASE_URL:}
   jwt:
     # 必填:通过环境变量 JWT_SECRET 提供 >=32 字节强密钥(缺失则启动失败);与 tracker-service 共享
     secret: ${JWT_SECRET:}

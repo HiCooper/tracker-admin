@@ -2,7 +2,7 @@ package com.gateflow.tracker.controller;
 
 import com.gateflow.tracker.domain.dto.ApiResponse;
 import com.gateflow.tracker.domain.dto.HealthStatus;
-
+import com.gateflow.tracker.service.MonitorService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Value;
@@ -10,12 +10,13 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import javax.sql.DataSource;
-import java.lang.management.ManagementFactory;
 import java.sql.Connection;
 import java.sql.Statement;
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.*;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 @Tag(name = "Monitor API", description = "系统监控接口")
 @RestController
@@ -23,12 +24,15 @@ import java.util.*;
 public class MonitorController {
 
     private final DataSource dataSource;
+    private final MonitorService monitorService;
     private final String version;
     private final LocalDateTime startTime;
 
     public MonitorController(DataSource dataSource,
+                             MonitorService monitorService,
                              @Value("${gateflow.version:1.0.0}") String version) {
         this.dataSource = dataSource;
+        this.monitorService = monitorService;
         this.version = version;
         this.startTime = LocalDateTime.now();
     }
@@ -38,49 +42,31 @@ public class MonitorController {
     public ResponseEntity<ApiResponse<HealthStatus>> health() {
         Map<String, HealthStatus.ComponentStatus> components = new LinkedHashMap<>();
 
-        // DB check
+        // MySQL (real)
         long dbStart = System.currentTimeMillis();
         try (Connection conn = dataSource.getConnection();
              Statement stmt = conn.createStatement()) {
             stmt.execute("SELECT 1");
-            long dbLatency = System.currentTimeMillis() - dbStart;
             components.put("db", HealthStatus.ComponentStatus.builder()
-                    .status("UP").latency(dbLatency).build());
+                    .status("UP").latency(System.currentTimeMillis() - dbStart).build());
         } catch (Exception e) {
             components.put("db", HealthStatus.ComponentStatus.builder()
                     .status("DOWN").latency(System.currentTimeMillis() - dbStart)
                     .detail(e.getMessage()).build());
         }
 
-        // ClickHouse check (best-effort, don't fail if unavailable)
-        long chStart = System.currentTimeMillis();
-        try {
-            // ClickHouse is checked via JDBC — just mark as UNKNOWN for now
-            // since we don't have a dedicated ClickHouse DataSource bean
-            components.put("clickhouse", HealthStatus.ComponentStatus.builder()
-                    .status("UP").latency(System.currentTimeMillis() - chStart)
-                    .detail("not checked").build());
-        } catch (Exception e) {
-            components.put("clickhouse", HealthStatus.ComponentStatus.builder()
-                    .status("DOWN").latency(System.currentTimeMillis() - chStart)
-                    .detail(e.getMessage()).build());
-        }
+        // ClickHouse (real probe)
+        components.put("clickhouse", monitorService.clickHouseHealth());
 
-        // Determine overall status
         boolean allUp = components.values().stream().allMatch(c -> "UP".equals(c.getStatus()));
-        String overallStatus = allUp ? "UP" : "DEGRADED";
-
-        // Uptime
         Duration uptime = Duration.between(startTime, LocalDateTime.now());
-        String uptimeStr = String.format("%dh %dm", uptime.toHours(), uptime.toMinutesPart());
 
         HealthStatus status = HealthStatus.builder()
-                .status(overallStatus)
+                .status(allUp ? "UP" : "DEGRADED")
                 .components(components)
-                .uptime(uptimeStr)
+                .uptime(String.format("%dh %dm", uptime.toHours(), uptime.toMinutesPart()))
                 .version(version)
                 .build();
-
         return ResponseEntity.ok(ApiResponse.success(status));
     }
 
@@ -88,108 +74,79 @@ public class MonitorController {
     @Operation(summary = "监控仪表盘数据")
     public ResponseEntity<ApiResponse<Map<String, Object>>> dashboard(
             @RequestParam(defaultValue = "24") int timeRange) {
-        // Stub — returns empty dashboard structure
         Map<String, Object> data = new LinkedHashMap<>();
-        data.put("perf", Map.of(
-                "lcp", metricStub("LCP", 2500),
-                "fid", metricStub("FID", 100),
-                "cls", metricStub("CLS", 0.1),
-                "pageLoad", metricStub("Page Load", 3200),
-                "trend", List.of()
-        ));
-        data.put("errors", Map.of(
-                "total24h", 0,
-                "errorRate", 0.0,
-                "topErrors", List.of()
-        ));
-        data.put("apiCalls", Map.of(
-                "totalCalls24h", 0,
-                "overallErrorRate", 0.0,
-                "topSlowEndpoints", List.of(),
-                "topErrorEndpoints", List.of()
-        ));
-        data.put("pipeline", Map.of(
-                "eventsPerMinute", 0,
-                "kafkaLag", 0,
-                "dlqSize", 0,
-                "dedupRate", 0.0,
-                "clickhouseRows", 0
-        ));
-        data.put("dataQuality", Map.of(
-                "avgFieldNullRate", 0.0,
-                "totalEventsToday", 0,
-                "eventTypes", 0
-        ));
+        // Web Vitals 性能、API 调用统计当前无采集来源,显式标注未实现(不再编造数值)
+        data.put("perf", monitorService.unavailableSection("Web Vitals 采集未接入"));
+        data.put("apiCalls", monitorService.unavailableSection("API 调用统计采集未接入"));
+        data.put("errors", Map.of("recent", monitorService.recentErrors(20)));
+        data.put("pipeline", monitorService.pipeline());
+        data.put("dataQuality", monitorService.dataQuality());
         return ResponseEntity.ok(ApiResponse.success(data));
     }
 
     @GetMapping("/errors")
     @Operation(summary = "错误列表")
-    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> errors() {
-        return ResponseEntity.ok(ApiResponse.success(List.of()));
+    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> errors(
+            @RequestParam(defaultValue = "50") int limit) {
+        return ResponseEntity.ok(ApiResponse.success(monitorService.recentErrors(limit)));
     }
 
     @GetMapping("/api-calls")
-    @Operation(summary = "API调用统计")
-    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> apiCalls(
+    @Operation(summary = "API调用统计(未接入)")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> apiCalls(
             @RequestParam(defaultValue = "slow") String type) {
-        return ResponseEntity.ok(ApiResponse.success(List.of()));
+        return ResponseEntity.ok(ApiResponse.success(
+                monitorService.unavailableSection("API 调用统计采集未接入")));
     }
 
     @GetMapping("/pipeline")
     @Operation(summary = "数据管道状态")
     public ResponseEntity<ApiResponse<Map<String, Object>>> pipeline() {
-        return ResponseEntity.ok(ApiResponse.success(Map.of(
-                "eventsPerMinute", 0,
-                "kafkaLag", 0,
-                "dlqSize", 0,
-                "dedupRate", 0.0,
-                "clickhouseRows", 0
-        )));
-    }
-
-    @GetMapping("/alerts/rules")
-    @Operation(summary = "告警规则列表")
-    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> alertRules() {
-        return ResponseEntity.ok(ApiResponse.success(List.of()));
-    }
-
-    @PutMapping("/alerts/rules/{id}")
-    @Operation(summary = "更新告警规则")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> updateAlertRule(
-            @PathVariable int id, @RequestBody Map<String, Object> body) {
-        return ResponseEntity.ok(ApiResponse.success(body));
-    }
-
-    @GetMapping("/quality/reports")
-    @Operation(summary = "数据质量报告列表")
-    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> qualityReports() {
-        return ResponseEntity.ok(ApiResponse.success(List.of()));
-    }
-
-    @PostMapping("/quality/run")
-    @Operation(summary = "执行数据质量检查")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> runQualityCheck(
-            @RequestBody Map<String, Object> body) {
-        return ResponseEntity.ok(ApiResponse.success(Map.of(
-                "id", UUID.randomUUID().toString(),
-                "status", "running"
-        )));
+        return ResponseEntity.ok(ApiResponse.success(monitorService.pipeline()));
     }
 
     @GetMapping("/metrics")
     @Operation(summary = "系统指标")
     public ResponseEntity<ApiResponse<Map<String, Object>>> metrics() {
-        return ResponseEntity.ok(ApiResponse.success(Map.of()));
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("pipeline", monitorService.pipeline());
+        m.put("dataQuality", monitorService.dataQuality());
+        return ResponseEntity.ok(ApiResponse.success(m));
     }
 
-    private static Map<String, Object> metricStub(String metric, double p50) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("metric", metric);
-        m.put("p50", p50);
-        m.put("p75", p50 * 1.5);
-        m.put("p95", p50 * 3);
-        m.put("rating", "good");
-        return m;
+    // ── 以下能力暂未实现(无告警引擎/质量检查引擎):保留端点契约,返回空/未实现标记,避免前端 404 与假数据 ──
+
+    @GetMapping("/alerts/rules")
+    @Operation(summary = "告警规则列表(未接入告警引擎)")
+    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> alertRules() {
+        return ResponseEntity.ok(ApiResponse.success(List.of()));
+    }
+
+    @PutMapping("/alerts/rules/{id}")
+    @Operation(summary = "更新告警规则(未接入)")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> updateAlertRule(
+            @PathVariable int id, @RequestBody(required = false) Map<String, Object> body) {
+        return ResponseEntity.ok(ApiResponse.success(
+                monitorService.unavailableSection("告警引擎未接入")));
+    }
+
+    @GetMapping("/quality/reports")
+    @Operation(summary = "数据质量报告列表(未接入)")
+    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> qualityReports() {
+        return ResponseEntity.ok(ApiResponse.success(List.of()));
+    }
+
+    @GetMapping("/quality/failures")
+    @Operation(summary = "数据质量失败项(未接入)")
+    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> qualityFailures() {
+        return ResponseEntity.ok(ApiResponse.success(List.of()));
+    }
+
+    @PostMapping("/quality/run")
+    @Operation(summary = "执行数据质量检查(未接入)")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> runQualityCheck(
+            @RequestBody(required = false) Map<String, Object> body) {
+        return ResponseEntity.ok(ApiResponse.success(
+                monitorService.unavailableSection("数据质量检查引擎未接入")));
     }
 }
