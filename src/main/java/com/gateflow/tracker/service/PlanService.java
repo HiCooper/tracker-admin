@@ -26,6 +26,7 @@ import java.util.List;
 public class PlanService {
 
     private final TrackerPlanMapper planMapper;
+    private final SchemaPublishService schemaPublishService;
     private static final ObjectMapper om = new ObjectMapper();
 
     // ---- List ----
@@ -142,8 +143,17 @@ public class PlanService {
         }
         p.setStatus("online");
         planMapper.updateById(p);
+        // 上线即发布事件契约到 Redis(best-effort,失败不影响上线)
+        schemaPublishService.publishForPlan(p);
         log.info("Plan online: id={}", id);
         return toVO(p);
+    }
+
+    /** 手动(重新)发布某方案的事件契约;返回发布所用 appCode(失败 null)。 */
+    public String publishSchema(Long id) {
+        TrackerPlan p = planMapper.selectById(id);
+        if (p == null) throw new BizException(ErrorCode.PLAN_NOT_FOUND, "Plan not found: " + id);
+        return schemaPublishService.publishForPlan(p);
     }
 
     // ---- Helpers ----

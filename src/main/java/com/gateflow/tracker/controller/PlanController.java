@@ -85,4 +85,14 @@ public class PlanController {
             @Parameter(description = "方案ID") @PathVariable Long id) {
         return ResponseEntity.ok(ApiResponse.success(planService.goOnline(id)));
     }
+
+    @PostMapping("/{id}/publish-schema")
+    @RequireRole("admin")
+    @Operation(summary = "发布事件契约到采集服务")
+    public ResponseEntity<ApiResponse<String>> publishSchema(
+            @Parameter(description = "方案ID") @PathVariable Long id) {
+        String appCode = planService.publishSchema(id);
+        return ResponseEntity.ok(ApiResponse.success(
+                appCode != null ? "published" : "skipped", appCode));
+    }
 }
