@@ -114,21 +114,9 @@ public class MonitorController {
         return ResponseEntity.ok(ApiResponse.success(m));
     }
 
-    // ── 以下能力暂未实现(无告警引擎/质量检查引擎):保留端点契约,返回空/未实现标记,避免前端 404 与假数据 ──
+    // 告警规则/历史已迁至 AlertController(/api/v1/monitor/alerts/**)。
 
-    @GetMapping("/alerts/rules")
-    @Operation(summary = "告警规则列表(未接入告警引擎)")
-    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> alertRules() {
-        return ResponseEntity.ok(ApiResponse.success(List.of()));
-    }
-
-    @PutMapping("/alerts/rules/{id}")
-    @Operation(summary = "更新告警规则(未接入)")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> updateAlertRule(
-            @PathVariable int id, @RequestBody(required = false) Map<String, Object> body) {
-        return ResponseEntity.ok(ApiResponse.success(
-                monitorService.unavailableSection("告警引擎未接入")));
-    }
+    // ── 数据质量检查引擎暂未实现:保留端点契约,返回空/未实现标记,避免前端 404 与假数据 ──
 
     @GetMapping("/quality/reports")
     @Operation(summary = "数据质量报告列表(未接入)")
