@@ -12,10 +12,8 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 
 /**
- * 从 ClickHouse 计算告警所需指标(全局窗口聚合)。
- *
- * <p>注:events 表无 app 维度,当前指标为全局口径(app_code 仅作标签);
- * 按 app 细分需先给 events 增加 app 维度(身份/契约工作项)。
+ * 从 ClickHouse 计算告警所需指标。规则配置 appCode 时按 app 维度过滤(events.app_code),
+ * 否则为全局口径。
  */
 @Slf4j
 @Service
@@ -39,34 +37,43 @@ public class MetricQueryService {
 
     public MetricSample sample(TrackerAlertRule rule) {
         int win = rule.getWindowMinutes() != null ? rule.getWindowMinutes() : 60;
+        String app = rule.getAppCode();
         return switch (rule.getMetric()) {
-            case "event_volume_drop" -> new MetricSample(currentVolume(win), baselineVolume(win));
-            case "error_rate" -> new MetricSample(errorRate(win), 0);
-            case "null_rate" -> new MetricSample(nullRate(win), 0);
+            case "event_volume_drop" -> new MetricSample(currentVolume(win, app), baselineVolume(win, app));
+            case "error_rate" -> new MetricSample(errorRate(win, app), 0);
+            case "null_rate" -> new MetricSample(nullRate(win, app), 0);
             default -> new MetricSample(0, 0);
         };
     }
 
-    private double currentVolume(int win) {
-        return scalar("SELECT count() FROM gateflow_tracker.events " +
-                "WHERE timestamp >= now() - INTERVAL " + win + " MINUTE");
+    /** 规则配置 appCode 时追加 app 维度过滤(去除单引号防注入,值由管理员配置)。 */
+    static String appFilter(String appCode) {
+        if (appCode == null || appCode.isBlank()) {
+            return "";
+        }
+        return " AND app_code = '" + appCode.replace("'", "") + "'";
     }
 
-    private double baselineVolume(int win) {
+    private double currentVolume(int win, String app) {
+        return scalar("SELECT count() FROM gateflow_tracker.events " +
+                "WHERE timestamp >= now() - INTERVAL " + win + " MINUTE" + appFilter(app));
+    }
+
+    private double baselineVolume(int win, String app) {
         // 同一窗口、前一天
         return scalar("SELECT count() FROM gateflow_tracker.events " +
                 "WHERE timestamp >= now() - INTERVAL 1 DAY - INTERVAL " + win + " MINUTE " +
-                "AND timestamp < now() - INTERVAL 1 DAY");
+                "AND timestamp < now() - INTERVAL 1 DAY" + appFilter(app));
     }
 
-    private double errorRate(int win) {
+    private double errorRate(int win, String app) {
         return scalar("SELECT if(count() = 0, 0, countIf(event_type = 'error') / count()) " +
-                "FROM gateflow_tracker.events WHERE timestamp >= now() - INTERVAL " + win + " MINUTE");
+                "FROM gateflow_tracker.events WHERE timestamp >= now() - INTERVAL " + win + " MINUTE" + appFilter(app));
     }
 
-    private double nullRate(int win) {
+    private double nullRate(int win, String app) {
         return scalar("SELECT if(count() = 0, 0, countIf(user_id = '') / count()) " +
-                "FROM gateflow_tracker.events WHERE timestamp >= now() - INTERVAL " + win + " MINUTE");
+                "FROM gateflow_tracker.events WHERE timestamp >= now() - INTERVAL " + win + " MINUTE" + appFilter(app));
     }
 
     private double scalar(String sql) {
