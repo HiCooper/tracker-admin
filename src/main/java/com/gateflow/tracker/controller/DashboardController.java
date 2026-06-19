@@ -1,6 +1,8 @@
 package com.gateflow.tracker.controller;
 
 import com.gateflow.tracker.domain.dto.*;
+import com.gateflow.tracker.domain.dto.dashboard.DashboardDataDto.DashboardDataResult;
+import com.gateflow.tracker.service.DashboardDataService;
 import com.gateflow.tracker.service.DashboardService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -20,6 +22,16 @@ import java.util.List;
 public class DashboardController {
 
     private final DashboardService dashboardService;
+    private final DashboardDataService dashboardDataService;
+
+    @GetMapping("/{id}/data")
+    @Operation(summary = "看板取数(逐 widget 计算真实数据)")
+    public ResponseEntity<ApiResponse<DashboardDataResult>> getDashboardData(
+            @Parameter(description = "看板ID") @PathVariable Long id,
+            @RequestParam(required = false) String startTime,
+            @RequestParam(required = false) String endTime) {
+        return ResponseEntity.ok(ApiResponse.success(dashboardDataService.data(id, startTime, endTime)));
+    }
 
     @GetMapping
     @Operation(summary = "看板列表")
