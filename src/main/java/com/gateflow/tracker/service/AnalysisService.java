@@ -211,7 +211,7 @@ public class AnalysisService {
         String sql = """
             SELECT spma,
                    countIf(event_type = 'page_view') as pv,
-                   uniqIf(user_id, event_type = 'page_view') as dau
+                   uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'page_view') as dau
             FROM gateflow_tracker.events
             WHERE spma != ''
             GROUP BY spma
@@ -234,7 +234,7 @@ public class AnalysisService {
         String sql = """
             SELECT spmb,
                    countIf(event_type = 'page_view') as pv,
-                   uniqIf(user_id, event_type = 'page_view') as uv,
+                   uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'page_view') as uv,
                    avgIf(stay_duration, event_type = 'page_view') as avg_stay
             FROM gateflow_tracker.events
             WHERE spma = ? AND spmb != ''
@@ -261,7 +261,7 @@ public class AnalysisService {
 
     private PageStat querySinglePageStat(String appCode, String pageCode) {
         String sql = """
-            SELECT uniqIf(user_id, event_type = 'page_view') as uv
+            SELECT uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'page_view') as uv
             FROM gateflow_tracker.events
             WHERE spma = ? AND spmb = ?
             """;
@@ -282,9 +282,9 @@ public class AnalysisService {
         String sql = """
             SELECT spmc,
                    countIf(event_type = 'exposure') as exp_pv,
-                   uniqIf(user_id, event_type = 'exposure') as exp_uv,
+                   uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'exposure') as exp_uv,
                    countIf(event_type = 'click') as click_pv,
-                   uniqIf(user_id, event_type = 'click') as click_uv
+                   uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'click') as click_uv
             FROM gateflow_tracker.events
             WHERE spma = ? AND spmb = ? AND spmc != ''
             GROUP BY spmc
@@ -311,9 +311,9 @@ public class AnalysisService {
         String sql = """
             SELECT spmd,
                    countIf(event_type = 'exposure') as exp_pv,
-                   uniqIf(user_id, event_type = 'exposure') as exp_uv,
+                   uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'exposure') as exp_uv,
                    countIf(event_type = 'click') as click_pv,
-                   uniqIf(user_id, event_type = 'click') as click_uv
+                   uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'click') as click_uv
             FROM gateflow_tracker.events
             WHERE spma = ? AND spmb = ? AND spmc = ? AND spmd != ''
             GROUP BY spmd
@@ -341,7 +341,7 @@ public class AnalysisService {
         String sql = """
             SELECT toStartOfHour(timestamp) as hr,
                    countIf(event_type = 'exposure') as exp_pv,
-                   uniqIf(user_id, event_type = 'exposure') as exp_uv
+                   uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'exposure') as exp_uv
             FROM gateflow_tracker.events
             WHERE spma = ? AND timestamp >= now() - INTERVAL 24 HOUR
             GROUP BY hr ORDER BY hr
@@ -353,7 +353,7 @@ public class AnalysisService {
         String sql = """
             SELECT toStartOfHour(timestamp) as hr,
                    countIf(event_type = 'exposure') as exp_pv,
-                   uniqIf(user_id, event_type = 'exposure') as exp_uv
+                   uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'exposure') as exp_uv
             FROM gateflow_tracker.events
             WHERE spma = ? AND spmb = ? AND timestamp >= now() - INTERVAL 24 HOUR
             GROUP BY hr ORDER BY hr
@@ -366,7 +366,7 @@ public class AnalysisService {
         String sql = """
             SELECT toStartOfHour(timestamp) as hr,
                    countIf(event_type = 'exposure') as exp_pv,
-                   uniqIf(user_id, event_type = 'exposure') as exp_uv
+                   uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'exposure') as exp_uv
             FROM gateflow_tracker.events
             WHERE spma = ? AND spmb = ? AND spmc = ? AND timestamp >= now() - INTERVAL 24 HOUR
             GROUP BY hr ORDER BY hr
@@ -379,9 +379,9 @@ public class AnalysisService {
         String sql = """
             SELECT toDate(timestamp) as d,
                    countIf(event_type = 'exposure') as exp_pv,
-                   uniqIf(user_id, event_type = 'exposure') as exp_uv,
+                   uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'exposure') as exp_uv,
                    countIf(event_type = 'click') as click_pv,
-                   uniqIf(user_id, event_type = 'click') as click_uv
+                   uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'click') as click_uv
             FROM gateflow_tracker.events
             WHERE timestamp >= now() - INTERVAL ? DAY
             GROUP BY d ORDER BY d

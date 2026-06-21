@@ -134,7 +134,7 @@ public class PlatformDataService {
                 rs -> { a.setAvgDuration(round1(rs.getDouble("ad"))); a.setAvgPagesPerSession(round1(rs.getDouble("ap"))); });
         a.setDay7Retention(pct(retentionFraction(start, end, 7)));
 
-        forEachRow("SELECT if(utm_source='','direct',utm_source) ch, uniqExact(user_id) uv, count() ses, " +
+        forEachRow("SELECT if(utm_source='','direct',utm_source) ch, uniqExact(" + UK + ") uv, count() ses, " +
                 "avg(duration)/1000 ad, if(count()=0,0,sum(is_bounce)/count()) bo FROM " + SESSIONS +
                 " WHERE " + tf("start_time", start, end) + " GROUP BY ch ORDER BY uv DESC LIMIT 10",
                 rs -> a.getChannels().add(new ChannelDetail(rs.getString("ch"), rs.getLong("uv"), 0,
