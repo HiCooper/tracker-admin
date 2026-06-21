@@ -46,7 +46,7 @@ class DashboardDataServiceTest {
 
     @Test
     void scalarMetricRoutesToCoreMetrics() {
-        when(platformData.coreMetrics("s", "e"))
+        when(platformData.coreMetrics(null, "s", "e"))
                 .thenReturn(new CoreMetrics(100, 30, 500, 12, 45.5, 3.2, 22.1, 4.4));
         var s = service();
         assertThat(s.scalarMetric("uv", "s", "e")).isEqualTo(100);

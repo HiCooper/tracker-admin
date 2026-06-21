@@ -16,6 +16,7 @@ import java.util.List;
 /**
  * 平台数据 overview:核心指标 / 渠道 / 页面 / 实时 / 分析 / 留存 / 异常,全部直查 ClickHouse(全局口径)。
  * 用户口径采用身份缝合后的 userKey。率字段单位见各方法说明。CH 不可达时返回空/0。
+ * 支持可选 appCode 过滤(events/sessions 均含 app_code 维度);appCode 为空表示全部 app。
  */
 @Slf4j
 @Service
@@ -44,20 +45,33 @@ public class PlatformDataService {
                 + col + ") <= toDate('" + AdvancedAnalysisService.toChTime(end) + "')";
     }
 
+    /** 可选 app 维度过滤(追加到已有 WHERE 之后);值去引号防注入。appCode 为空返回空串。 */
+    static String appf(String appCode) {
+        return (appCode == null || appCode.isBlank())
+                ? "" : " AND app_code = '" + AdvancedAnalysisService.san(appCode) + "'";
+    }
+
+    /** 无前置 WHERE 的子查询场景:以 WHERE app_code=... 开头(否则返回空串)。 */
+    private static String appWhere(String appCode) {
+        return (appCode == null || appCode.isBlank())
+                ? "" : " WHERE app_code = '" + AdvancedAnalysisService.san(appCode) + "' ";
+    }
+
     // ── core metrics ──（率为百分数,时长为秒）
-    public CoreMetrics coreMetrics(String start, String end) {
+    public CoreMetrics coreMetrics(String appCode, String start, String end) {
         CoreMetrics m = new CoreMetrics(0, 0, 0, 0, 0, 0, 0, 0);
         if (ch == null) return m;
-        String ef = tf("timestamp", start, end);
+        String ef = tf("timestamp", start, end) + appf(appCode);
         forEachRow("SELECT uniqExact(" + UK + ") uv, uniqExactIf(session_id, session_id!='') ses, " +
                 "countIf(event_type='page_view') pv FROM " + EVENTS + " WHERE " + ef, rs -> {
             m.setUv(rs.getLong("uv"));
             m.setSessions(rs.getLong("ses"));
             m.setPv(rs.getLong("pv"));
         });
-        m.setNewUsers(newUsers(start, end));
+        m.setNewUsers(newUsers(appCode, start, end));
         forEachRow("SELECT avg(duration)/1000 ad, avg(page_views) dep, " +
-                "if(count()=0,0,sum(is_bounce)/count()) bo FROM " + SESSIONS + " WHERE " + tf("start_time", start, end), rs -> {
+                "if(count()=0,0,sum(is_bounce)/count()) bo FROM " + SESSIONS + " WHERE " +
+                tf("start_time", start, end) + appf(appCode), rs -> {
             m.setAvgDuration(round1(rs.getDouble("ad")));
             m.setAvgDepth(round1(rs.getDouble("dep")));
             m.setBounceRate(pct(rs.getDouble("bo")));
@@ -67,76 +81,77 @@ public class PlatformDataService {
         return m;
     }
 
-    private long newUsers(String start, String end) {
+    private long newUsers(String appCode, String start, String end) {
         long[] n = {0};
         forEachRow("SELECT uniqExact(uk) c FROM (SELECT " + UK + " uk, min(timestamp) fs FROM " + EVENTS +
-                " GROUP BY uk HAVING toDate(fs) >= toDate('" + AdvancedAnalysisService.toChTime(start) +
+                appWhere(appCode) + " GROUP BY uk HAVING toDate(fs) >= toDate('" + AdvancedAnalysisService.toChTime(start) +
                 "') AND toDate(fs) <= toDate('" + AdvancedAnalysisService.toChTime(end) + "'))",
                 rs -> n[0] = rs.getLong("c"));
         return n[0];
     }
 
     // ── channels (top by uv) ──
-    public List<ChannelBreakdown> channels(String start, String end) {
+    public List<ChannelBreakdown> channels(String appCode, String start, String end) {
         List<ChannelBreakdown> out = new ArrayList<>();
         forEachRow("SELECT if(utm_source='','direct',utm_source) name, uniqExact(" + UK + ") uv FROM " + EVENTS +
-                " WHERE " + tf("timestamp", start, end) + " GROUP BY name ORDER BY uv DESC LIMIT 10",
+                " WHERE " + tf("timestamp", start, end) + appf(appCode) + " GROUP BY name ORDER BY uv DESC LIMIT 10",
                 rs -> out.add(new ChannelBreakdown(rs.getString("name"), rs.getLong("uv"), 0)));
         for (int i = 0; i < out.size(); i++) out.get(i).setRank(i + 1);
         return out;
     }
 
     // ── pages (top by pv) ──
-    public List<PageBreakdown> pages(String start, String end) {
+    public List<PageBreakdown> pages(String appCode, String start, String end) {
         List<PageBreakdown> out = new ArrayList<>();
         forEachRow("SELECT page_url name, count() pv FROM " + EVENTS + " WHERE " + tf("timestamp", start, end) +
-                " AND event_type='page_view' AND page_url!='' GROUP BY name ORDER BY pv DESC LIMIT 10",
+                appf(appCode) + " AND event_type='page_view' AND page_url!='' GROUP BY name ORDER BY pv DESC LIMIT 10",
                 rs -> out.add(new PageBreakdown(rs.getString("name"), rs.getLong("pv"), 0)));
         for (int i = 0; i < out.size(); i++) out.get(i).setRank(i + 1);
         return out;
     }
 
     // ── realtime ──
-    public RealtimeSnapshot realtime() {
+    public RealtimeSnapshot realtime(String appCode) {
         RealtimeSnapshot r = new RealtimeSnapshot(0, 0, 0, 0, new ArrayList<>());
         if (ch == null) return r;
-        forEachRow("SELECT uniqExact(" + UK + ") c FROM " + EVENTS + " WHERE timestamp >= now() - INTERVAL 5 MINUTE",
+        forEachRow("SELECT uniqExact(" + UK + ") c FROM " + EVENTS + " WHERE timestamp >= now() - INTERVAL 5 MINUTE" + appf(appCode),
                 rs -> r.setOnline(rs.getLong("c")));
         forEachRow("SELECT uniqExact(" + UK + ") uv, uniqExactIf(session_id, session_id!='') ses FROM " + EVENTS +
-                " WHERE timestamp >= toStartOfDay(now())", rs -> {
+                " WHERE timestamp >= toStartOfDay(now())" + appf(appCode), rs -> {
             r.setTodayUv(rs.getLong("uv"));
             r.setTodaySessions(rs.getLong("ses"));
         });
         forEachRow("SELECT uniqExact(uk) c FROM (SELECT " + UK + " uk, min(timestamp) fs FROM " + EVENTS +
-                " GROUP BY uk HAVING fs >= toStartOfDay(now()))", rs -> r.setTodayNewUsers(rs.getLong("c")));
+                appWhere(appCode) + " GROUP BY uk HAVING fs >= toStartOfDay(now()))", rs -> r.setTodayNewUsers(rs.getLong("c")));
         List<TopPage> tops = new ArrayList<>();
         forEachRow("SELECT page_url name, count() c FROM " + EVENTS + " WHERE timestamp >= now() - INTERVAL 1 HOUR " +
-                "AND event_type='page_view' AND page_url!='' GROUP BY name ORDER BY c DESC LIMIT 10",
+                "AND event_type='page_view' AND page_url!='' " + appf(appCode) + " GROUP BY name ORDER BY c DESC LIMIT 10",
                 rs -> tops.add(new TopPage(rs.getString("name"), rs.getLong("c"))));
         r.setTopPages(tops);
         return r;
     }
 
     // ── analysis overview ──
-    public AnalysisOverview analysis(String start, String end) {
+    public AnalysisOverview analysis(String appCode, String start, String end) {
         AnalysisOverview a = new AnalysisOverview(0, 0, 0, 0, 0, 0, new ArrayList<>(), new ArrayList<>());
         if (ch == null) return a;
-        forEachRow("SELECT uniqExact(" + UK + ") c FROM " + EVENTS + " WHERE timestamp >= toStartOfDay(now())",
+        forEachRow("SELECT uniqExact(" + UK + ") c FROM " + EVENTS + " WHERE timestamp >= toStartOfDay(now())" + appf(appCode),
                 rs -> a.setDau(rs.getLong("c")));
-        forEachRow("SELECT uniqExact(" + UK + ") c FROM " + EVENTS + " WHERE timestamp >= now() - INTERVAL 30 DAY",
+        forEachRow("SELECT uniqExact(" + UK + ") c FROM " + EVENTS + " WHERE timestamp >= now() - INTERVAL 30 DAY" + appf(appCode),
                 rs -> a.setMau(rs.getLong("c")));
-        String ef = tf("timestamp", start, end);
+        String ef = tf("timestamp", start, end) + appf(appCode);
         long[] uv = {0}, ses = {0};
         forEachRow("SELECT uniqExact(" + UK + ") uv, uniqExact(session_id) ses FROM " + EVENTS + " WHERE " + ef,
                 rs -> { uv[0] = rs.getLong("uv"); ses[0] = rs.getLong("ses"); });
         a.setAvgSessionsPerUser(uv[0] > 0 ? round1((double) ses[0] / uv[0]) : 0);
-        forEachRow("SELECT avg(duration)/1000 ad, avg(page_views) ap FROM " + SESSIONS + " WHERE " + tf("start_time", start, end),
+        forEachRow("SELECT avg(duration)/1000 ad, avg(page_views) ap FROM " + SESSIONS + " WHERE " +
+                tf("start_time", start, end) + appf(appCode),
                 rs -> { a.setAvgDuration(round1(rs.getDouble("ad"))); a.setAvgPagesPerSession(round1(rs.getDouble("ap"))); });
-        a.setDay7Retention(pct(retentionFraction(start, end, 7)));
+        a.setDay7Retention(pct(retentionFraction(appCode, start, end, 7)));
 
         forEachRow("SELECT if(utm_source='','direct',utm_source) ch, uniqExact(" + UK + ") uv, count() ses, " +
                 "avg(duration)/1000 ad, if(count()=0,0,sum(is_bounce)/count()) bo FROM " + SESSIONS +
-                " WHERE " + tf("start_time", start, end) + " GROUP BY ch ORDER BY uv DESC LIMIT 10",
+                " WHERE " + tf("start_time", start, end) + appf(appCode) + " GROUP BY ch ORDER BY uv DESC LIMIT 10",
                 rs -> a.getChannels().add(new ChannelDetail(rs.getString("ch"), rs.getLong("uv"), 0,
                         rs.getLong("ses"), round1(rs.getDouble("ad")), pct(rs.getDouble("bo")))));
         forEachRow("SELECT page_url path, uniqExact(" + UK + ") uv, count() pv, avg(stay_duration)/1000 st FROM " + EVENTS +
@@ -147,7 +162,7 @@ public class PlatformDataService {
     }
 
     // ── retention (rates as 0..1 fractions) ──
-    public RetentionResult retention(String start, String end) {
+    public RetentionResult retention(String appCode, String start, String end) {
         List<Integer> days = List.of(1, 3, 7, 14, 30);
         List<CohortRow> cohorts = new ArrayList<>();
         long[] totalInit = {0};
@@ -155,11 +170,12 @@ public class PlatformDataService {
         if (ch != null) {
             StringBuilder cols = new StringBuilder();
             for (int d : days) cols.append(", uniqExactIf(c.uk, a.ad = c.cd + ").append(d).append(") d").append(d);
+            String af = appf(appCode);
             String sql = "SELECT cohortDate, users" + retAlias(days) + " FROM (" +
                     "WITH cohorts AS (SELECT " + UK + " uk, min(toDate(timestamp)) cd FROM " + EVENTS +
-                    " WHERE " + tf("timestamp", start, end) + " GROUP BY uk), " +
+                    " WHERE " + tf("timestamp", start, end) + af + " GROUP BY uk), " +
                     "activity AS (SELECT " + UK + " uk, toDate(timestamp) ad FROM " + EVENTS +
-                    " WHERE " + tf("timestamp", start, end) + " GROUP BY uk, ad) " +
+                    " WHERE " + tf("timestamp", start, end) + af + " GROUP BY uk, ad) " +
                     "SELECT c.cd cohortDate, uniqExact(c.uk) users" + cols +
                     " FROM cohorts c LEFT JOIN activity a ON c.uk=a.uk GROUP BY c.cd ORDER BY c.cd)";
             forEachRow(sql, rs -> {
@@ -180,8 +196,8 @@ public class PlatformDataService {
         return new RetentionResult(new RetentionSummary(d1, d7, d30, d7), cohorts);
     }
 
-    private double retentionFraction(String start, String end, int day) {
-        RetentionResult r = retention(start, end);
+    private double retentionFraction(String appCode, String start, String end, int day) {
+        RetentionResult r = retention(appCode, start, end);
         return switch (day) {
             case 1 -> r.getSummary().getDay1Rate();
             case 7 -> r.getSummary().getDay7Rate();
@@ -191,22 +207,23 @@ public class PlatformDataService {
     }
 
     // ── anomalies: 当日 vs 前一日 ──
-    public List<AnomalyItem> anomalies(String date) {
+    public List<AnomalyItem> anomalies(String appCode, String date) {
         List<AnomalyItem> out = new ArrayList<>();
         if (ch == null) return out;
         String d = AdvancedAnalysisService.toChTime(date);
-        out.add(dayAnomaly("访问人数 (UV)", "uniqExact(" + UK + ")", d));
-        out.add(dayAnomaly("访问量 (PV)", "countIf(event_type='page_view')", d));
-        out.add(dayAnomaly("会话数", "uniqExact(session_id)", d));
+        out.add(dayAnomaly(appCode, "访问人数 (UV)", "uniqExact(" + UK + ")", d));
+        out.add(dayAnomaly(appCode, "访问量 (PV)", "countIf(event_type='page_view')", d));
+        out.add(dayAnomaly(appCode, "会话数", "uniqExact(session_id)", d));
         out.removeIf(java.util.Objects::isNull);
         return out;
     }
 
-    private AnomalyItem dayAnomaly(String metric, String expr, String date) {
+    private AnomalyItem dayAnomaly(String appCode, String metric, String expr, String date) {
         long[] today = {0}, prev = {0};
-        forEachRow("SELECT " + expr + " v FROM " + EVENTS + " WHERE toDate(timestamp) = toDate('" + date + "')",
+        String af = appf(appCode);
+        forEachRow("SELECT " + expr + " v FROM " + EVENTS + " WHERE toDate(timestamp) = toDate('" + date + "')" + af,
                 rs -> today[0] = rs.getLong("v"));
-        forEachRow("SELECT " + expr + " v FROM " + EVENTS + " WHERE toDate(timestamp) = toDate('" + date + "') - 1",
+        forEachRow("SELECT " + expr + " v FROM " + EVENTS + " WHERE toDate(timestamp) = toDate('" + date + "') - 1" + af,
                 rs -> prev[0] = rs.getLong("v"));
         return anomaly(metric, today[0], prev[0]);
     }

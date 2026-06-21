@@ -101,7 +101,7 @@ public class DashboardDataService {
 
     // ── 单值指标 ──
     double scalarMetric(String metric, String start, String end) {
-        PlatformDto.CoreMetrics m = platformData.coreMetrics(start, end);
+        PlatformDto.CoreMetrics m = platformData.coreMetrics(null, start, end);
         return switch (metric) {
             case "uv" -> m.getUv();
             case "pv" -> m.getPv();
@@ -149,7 +149,7 @@ public class DashboardDataService {
 
     private List<Map<String, Object>> channelSeries(String start, String end) {
         List<Map<String, Object>> out = new ArrayList<>();
-        for (PlatformDto.ChannelBreakdown c : platformData.channels(start, end)) {
+        for (PlatformDto.ChannelBreakdown c : platformData.channels(null, start, end)) {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("name", c.getName());
             row.put("value", c.getUv());
@@ -160,7 +160,7 @@ public class DashboardDataService {
 
     private List<Map<String, Object>> pageRows(String start, String end) {
         List<Map<String, Object>> out = new ArrayList<>();
-        for (PlatformDto.PageBreakdown p : platformData.pages(start, end)) {
+        for (PlatformDto.PageBreakdown p : platformData.pages(null, start, end)) {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("page", p.getName());
             row.put("pv", p.getPv());
