@@ -58,7 +58,7 @@ public class EventAnalysisService {
         }
         StringBuilder sql = new StringBuilder(
                 "SELECT toDate(timestamp) AS d, toHour(timestamp) AS h, platform, event_type, " +
-                "count() AS event_count, uniqExact(user_id) AS user_count, uniqExact(anonymous_id) AS device_count " +
+                "count() AS event_count, uniqExact(if(user_id != '', user_id, anonymous_id)) AS user_count, uniqExact(anonymous_id) AS device_count " +
                 "FROM gateflow_tracker.events " +
                 "WHERE timestamp >= ? AND timestamp < ? ");
         boolean hasEventKey = StringUtils.hasText(eventKey);

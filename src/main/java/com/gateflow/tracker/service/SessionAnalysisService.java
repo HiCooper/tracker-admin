@@ -55,7 +55,7 @@ public class SessionAnalysisService {
         }
         String sql =
                 "SELECT toDate(start_time) AS d, toHour(start_time) AS h, platform, " +
-                "count() AS session_count, uniqExact(user_id) AS user_count, " +
+                "count() AS session_count, uniqExact(if(user_id != '', user_id, anonymous_id)) AS user_count, " +
                 "avg(duration) AS avg_duration, avg(page_views) AS avg_page_depth, " +
                 "sum(is_bounce) AS bounce_count, " +
                 "if(count() = 0, 0, sum(is_bounce) / count()) AS bounce_rate " +
