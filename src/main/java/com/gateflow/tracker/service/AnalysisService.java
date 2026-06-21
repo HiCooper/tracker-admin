@@ -14,6 +14,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 
@@ -49,7 +50,10 @@ public class AnalysisService {
     public List<Map<String, Object>> getAppMetrics(String startTime, String endTime) {
         List<TrackerApp> apps = appMapper.selectList(
                 new LambdaQueryWrapper<TrackerApp>().orderByAsc(TrackerApp::getId));
-        Map<String, AppStat> stats = queryAppStats();
+        long startEpoch = toEpochSeconds(startTime);
+        long endEpoch = toEpochSeconds(endTime);
+        if (endEpoch > 0) endEpoch += 86400;
+        Map<String, AppStat> stats = queryAppStats(startEpoch, endEpoch);
 
         List<Map<String, Object>> result = new ArrayList<>();
         for (TrackerApp a : apps) {
@@ -72,13 +76,17 @@ public class AnalysisService {
         TrackerApp app = findAppByCode(appCode);
         List<TrackerPage> pages = pageMapper.selectList(
                 new LambdaQueryWrapper<TrackerPage>().eq(TrackerPage::getAppId, app == null ? 0 : app.getId()));
-        Map<String, PageStat> stats = queryPageStats(appCode);
-        List<Map<String, Object>> trend = queryPageTrend(appCode);
+        long startEpoch = toEpochSeconds(startTime);
+        long endEpoch = toEpochSeconds(endTime);
+        if (endEpoch > 0) endEpoch += 86400; // include full end day
+        boolean daily = (endEpoch - startEpoch) > 2 * 86400;
+        Map<String, PageStat> stats = queryPageStats(appCode, startEpoch, endEpoch);
+        List<Map<String, Object>> trend = queryPageTrend(appCode, startEpoch, endEpoch, daily);
 
         long totalUv = 0, totalPv = 0;
         List<Map<String, Object>> pageList = new ArrayList<>();
         for (TrackerPage p : pages) {
-            PageStat s = stats.getOrDefault(p.getPageCode(), PageStat.ZERO);
+            PageStat s = stats.getOrDefault(spmSegment(p.getPageCode()), PageStat.ZERO);
             totalPv += s.pv;
             totalUv += s.uv;
             Map<String, Object> m = new LinkedHashMap<>();
@@ -93,9 +101,15 @@ public class AnalysisService {
             pageList.add(m);
         }
 
+        long avgStay = queryPageAvgStay(appCode, startEpoch, endEpoch) / 1000; // ms → s
+        long totalSessions = querySessionCount(appCode, startEpoch, endEpoch);
+        long bounceCount = queryBounceSessions(appCode, startEpoch, endEpoch);
+        double bounceRate = totalSessions > 0 ? Math.round((double) bounceCount / totalSessions * 10000.0) / 10000.0 : 0;
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("trend", trend);
-        result.put("summary", Map.of("totalPv", totalPv, "totalUv", totalUv));
+        result.put("summary", Map.of("totalPv", totalPv, "totalUv", totalUv,
+                                      "avgStay", avgStay, "bounceRate", bounceRate));
         result.put("pages", pageList);
         return result;
     }
@@ -107,13 +121,17 @@ public class AnalysisService {
         TrackerPage page = app == null ? null : findPageByCode(app.getId(), pageCode);
         List<TrackerBlock> blocks = blockMapper.selectList(
                 new LambdaQueryWrapper<TrackerBlock>().eq(TrackerBlock::getPageId, page == null ? 0 : page.getId()));
-        Map<String, BlockStat> stats = queryBlockStats(appCode, pageCode);
-        List<Map<String, Object>> trend = queryBlockTrend(appCode, pageCode);
+        long startEpoch = toEpochSeconds(startTime);
+        long endEpoch = toEpochSeconds(endTime);
+        if (endEpoch > 0) endEpoch += 86400;
+        boolean daily = (endEpoch - startEpoch) > 2 * 86400;
+        Map<String, BlockStat> stats = queryBlockStats(appCode, pageCode, startEpoch, endEpoch);
+        List<Map<String, Object>> trend = queryBlockTrend(appCode, pageCode, startEpoch, endEpoch, daily);
 
         long totalExpPv = 0, totalExpUv = 0;
         List<Map<String, Object>> blockList = new ArrayList<>();
         for (TrackerBlock b : blocks) {
-            BlockStat s = stats.getOrDefault(b.getBlockCode(), BlockStat.ZERO);
+            BlockStat s = stats.getOrDefault(spmSegment(b.getBlockCode()), BlockStat.ZERO);
             totalExpPv += s.exposurePv;
             totalExpUv += s.exposureUv;
             Map<String, Object> m = new LinkedHashMap<>();
@@ -145,14 +163,18 @@ public class AnalysisService {
         TrackerBlock block = page == null ? null : findBlockByCode(page.getId(), blockCode);
         List<TrackerFunction> funcs = functionMapper.selectList(
                 new LambdaQueryWrapper<TrackerFunction>().eq(TrackerFunction::getBlockId, block == null ? 0 : block.getId()));
-        Map<String, FuncStat> stats = queryFuncStats(appCode, pageCode, blockCode);
-        List<Map<String, Object>> trend = queryFuncTrend(appCode, pageCode, blockCode);
-        PageStat pageStat = querySinglePageStat(appCode, pageCode);
+        long startEpoch = toEpochSeconds(startTime);
+        long endEpoch = toEpochSeconds(endTime);
+        if (endEpoch > 0) endEpoch += 86400;
+        boolean daily = (endEpoch - startEpoch) > 2 * 86400;
+        Map<String, FuncStat> stats = queryFuncStats(appCode, pageCode, blockCode, startEpoch, endEpoch);
+        List<Map<String, Object>> trend = queryFuncTrend(appCode, pageCode, blockCode, startEpoch, endEpoch, daily);
+        PageStat pageStat = querySinglePageStat(appCode, pageCode, startEpoch, endEpoch);
 
         long totalExpPv = 0, totalExpUv = 0;
         List<Map<String, Object>> funcList = new ArrayList<>();
         for (TrackerFunction f : funcs) {
-            FuncStat s = stats.getOrDefault(f.getFuncCode(), FuncStat.ZERO);
+            FuncStat s = stats.getOrDefault(spmSegment(f.getFuncCode()), FuncStat.ZERO);
             totalExpPv += s.exposurePv;
             totalExpUv += s.exposureUv;
             double penetration = pageStat.uv > 0 ? (double) s.clickUv / pageStat.uv : 0;
@@ -170,7 +192,9 @@ public class AnalysisService {
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("trend", trend);
-        result.put("summary", Map.of("totalExposurePv", totalExpPv, "totalExposureUv", totalExpUv));
+        result.put("summary", Map.of("totalExposurePv", totalExpPv,
+                                      "totalExposureUv", totalExpUv,
+                                      "functionCount", funcList.size()));
         result.put("functions", funcList);
         return result;
     }
@@ -207,22 +231,33 @@ public class AnalysisService {
         return chDataSource.getConnection();
     }
 
-    private Map<String, AppStat> queryAppStats() {
-        String sql = """
+    private Map<String, AppStat> queryAppStats(long startEpoch, long endEpoch) {
+        boolean hasTime = startEpoch > 0 || endEpoch > 0;
+        String sql = (hasTime ? """
             SELECT spma,
                    countIf(event_type = 'page_view') as pv,
                    uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'page_view') as dau
             FROM gateflow_tracker.events
             WHERE spma != ''
+              AND timestamp >= ? AND timestamp <= ?
             GROUP BY spma
-            """;
+            """ : """
+            SELECT spma,
+                   countIf(event_type = 'page_view') as pv,
+                   uniqIf(user_id, event_type = 'page_view') as dau
+            FROM gateflow_tracker.events
+            WHERE spma != ''
+            GROUP BY spma
+            """);
         Map<String, AppStat> map = new LinkedHashMap<>();
         try (Connection c = getChConnection();
-             PreparedStatement st = c.prepareStatement(sql);
-             ResultSet rs = st.executeQuery()) {
-            while (rs.next()) {
-                String code = rs.getString("spma");
-                map.put(code, new AppStat(rs.getLong("pv"), rs.getLong("dau")));
+             PreparedStatement st = c.prepareStatement(sql)) {
+            if (hasTime) { st.setLong(1, startEpoch); st.setLong(2, endEpoch); }
+            try (ResultSet rs = st.executeQuery()) {
+                while (rs.next()) {
+                    String code = rs.getString("spma");
+                    map.put(code, new AppStat(rs.getLong("pv"), rs.getLong("dau")));
+                }
             }
         } catch (SQLException e) {
             log.warn("ClickHouse app stats query failed: {}", e.getMessage());
@@ -230,25 +265,35 @@ public class AnalysisService {
         return map;
     }
 
-    private Map<String, PageStat> queryPageStats(String appCode) {
-        String sql = """
+    private Map<String, PageStat> queryPageStats(String appCode, long startEpoch, long endEpoch) {
+        boolean hasTime = startEpoch > 0 || endEpoch > 0;
+        String sql = (hasTime ? """
             SELECT spmb,
                    countIf(event_type = 'page_view') as pv,
                    uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'page_view') as uv,
                    avgIf(stay_duration, event_type = 'page_view') as avg_stay
             FROM gateflow_tracker.events
             WHERE spma = ? AND spmb != ''
+              AND timestamp >= ? AND timestamp <= ?
             GROUP BY spmb
-            """;
+            """ : """
+            SELECT spmb,
+                   countIf(event_type = 'page_view') as pv,
+                   uniqIf(user_id, event_type = 'page_view') as uv,
+                   avgIf(stay_duration, event_type = 'page_view') as avg_stay
+            FROM gateflow_tracker.events
+            WHERE spma = ? AND spmb != ''
+            GROUP BY spmb
+            """);
         Map<String, PageStat> map = new LinkedHashMap<>();
         try (Connection c = getChConnection();
              PreparedStatement st = c.prepareStatement(sql)) {
             st.setString(1, appCode);
+            if (hasTime) { st.setLong(2, startEpoch); st.setLong(3, endEpoch); }
             try (ResultSet rs = st.executeQuery()) {
                 while (rs.next()) {
                     String code = rs.getString("spmb");
                     long uv = rs.getLong("uv");
-                    // bounce rate simplified: 1 page-view sessions / total
                     map.put(code, new PageStat(rs.getLong("pv"), uv,
                             (long) rs.getDouble("avg_stay"), uv > 0 ? 0.0 : 0.0));
                 }
@@ -259,16 +304,23 @@ public class AnalysisService {
         return map;
     }
 
-    private PageStat querySinglePageStat(String appCode, String pageCode) {
-        String sql = """
+    private PageStat querySinglePageStat(String appCode, String pageCode, long startEpoch, long endEpoch) {
+        boolean hasTime = startEpoch > 0 || endEpoch > 0;
+        String sql = (hasTime ? """
             SELECT uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'page_view') as uv
             FROM gateflow_tracker.events
             WHERE spma = ? AND spmb = ?
-            """;
+              AND timestamp >= ? AND timestamp <= ?
+            """ : """
+            SELECT uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'page_view') as uv
+            FROM gateflow_tracker.events
+            WHERE spma = ? AND spmb = ?
+            """);
         try (Connection c = getChConnection();
              PreparedStatement st = c.prepareStatement(sql)) {
             st.setString(1, appCode);
-            st.setString(2, pageCode);
+            st.setString(2, spmSegment(pageCode));
+            if (hasTime) { st.setLong(3, startEpoch); st.setLong(4, endEpoch); }
             try (ResultSet rs = st.executeQuery()) {
                 if (rs.next()) return new PageStat(0, rs.getLong("uv"), 0, 0);
             }
@@ -278,8 +330,9 @@ public class AnalysisService {
         return PageStat.ZERO;
     }
 
-    private Map<String, BlockStat> queryBlockStats(String appCode, String pageCode) {
-        String sql = """
+    private Map<String, BlockStat> queryBlockStats(String appCode, String pageCode, long startEpoch, long endEpoch) {
+        boolean hasTime = startEpoch > 0 || endEpoch > 0;
+        String sql = (hasTime ? """
             SELECT spmc,
                    countIf(event_type = 'exposure') as exp_pv,
                    uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'exposure') as exp_uv,
@@ -287,13 +340,24 @@ public class AnalysisService {
                    uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'click') as click_uv
             FROM gateflow_tracker.events
             WHERE spma = ? AND spmb = ? AND spmc != ''
+              AND timestamp >= ? AND timestamp <= ?
             GROUP BY spmc
-            """;
+            """ : """
+            SELECT spmc,
+                   countIf(event_type = 'exposure') as exp_pv,
+                   uniqIf(user_id, event_type = 'exposure') as exp_uv,
+                   countIf(event_type = 'click') as click_pv,
+                   uniqIf(user_id, event_type = 'click') as click_uv
+            FROM gateflow_tracker.events
+            WHERE spma = ? AND spmb = ? AND spmc != ''
+            GROUP BY spmc
+            """);
         Map<String, BlockStat> map = new LinkedHashMap<>();
         try (Connection c = getChConnection();
              PreparedStatement st = c.prepareStatement(sql)) {
             st.setString(1, appCode);
-            st.setString(2, pageCode);
+            st.setString(2, spmSegment(pageCode));
+            if (hasTime) { st.setLong(3, startEpoch); st.setLong(4, endEpoch); }
             try (ResultSet rs = st.executeQuery()) {
                 while (rs.next()) {
                     String code = rs.getString("spmc");
@@ -307,8 +371,9 @@ public class AnalysisService {
         return map;
     }
 
-    private Map<String, FuncStat> queryFuncStats(String appCode, String pageCode, String blockCode) {
-        String sql = """
+    private Map<String, FuncStat> queryFuncStats(String appCode, String pageCode, String blockCode, long startEpoch, long endEpoch) {
+        boolean hasTime = startEpoch > 0 || endEpoch > 0;
+        String sql = (hasTime ? """
             SELECT spmd,
                    countIf(event_type = 'exposure') as exp_pv,
                    uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'exposure') as exp_uv,
@@ -316,14 +381,25 @@ public class AnalysisService {
                    uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'click') as click_uv
             FROM gateflow_tracker.events
             WHERE spma = ? AND spmb = ? AND spmc = ? AND spmd != ''
+              AND timestamp >= ? AND timestamp <= ?
             GROUP BY spmd
-            """;
+            """ : """
+            SELECT spmd,
+                   countIf(event_type = 'exposure') as exp_pv,
+                   uniqIf(user_id, event_type = 'exposure') as exp_uv,
+                   countIf(event_type = 'click') as click_pv,
+                   uniqIf(user_id, event_type = 'click') as click_uv
+            FROM gateflow_tracker.events
+            WHERE spma = ? AND spmb = ? AND spmc = ? AND spmd != ''
+            GROUP BY spmd
+            """);
         Map<String, FuncStat> map = new LinkedHashMap<>();
         try (Connection c = getChConnection();
              PreparedStatement st = c.prepareStatement(sql)) {
             st.setString(1, appCode);
-            st.setString(2, pageCode);
-            st.setString(3, blockCode);
+            st.setString(2, spmSegment(pageCode));
+            st.setString(3, spmSegment(blockCode));
+            if (hasTime) { st.setLong(4, startEpoch); st.setLong(5, endEpoch); }
             try (ResultSet rs = st.executeQuery()) {
                 while (rs.next()) {
                     String code = rs.getString("spmd");
@@ -337,53 +413,72 @@ public class AnalysisService {
         return map;
     }
 
-    private List<Map<String, Object>> queryPageTrend(String appCode) {
-        String sql = """
-            SELECT toStartOfHour(timestamp) as hr,
+    private List<Map<String, Object>> queryPageTrend(String appCode, long startEpoch, long endEpoch, boolean daily) {
+        String sql = daily ? """
+            SELECT toDate(toDateTime(timestamp)) as hr,
+                   countIf(event_type = 'exposure') as exp_pv,
+                   uniqIf(user_id, event_type = 'exposure') as exp_uv
+            FROM gateflow_tracker.events
+            WHERE spma = ? AND timestamp >= ? AND timestamp <= ?
+            GROUP BY hr ORDER BY hr
+            """ : """
+            SELECT toStartOfHour(toDateTime(timestamp)) as hr,
                    countIf(event_type = 'exposure') as exp_pv,
                    uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'exposure') as exp_uv
             FROM gateflow_tracker.events
-            WHERE spma = ? AND timestamp >= now() - INTERVAL 24 HOUR
+            WHERE spma = ? AND timestamp >= ? AND timestamp <= ?
             GROUP BY hr ORDER BY hr
             """;
-        return executeTrendQuery(sql, appCode);
+        return executeTrendQuery(sql, daily, appCode, startEpoch, endEpoch);
     }
 
-    private List<Map<String, Object>> queryBlockTrend(String appCode, String pageCode) {
-        String sql = """
-            SELECT toStartOfHour(timestamp) as hr,
+    private List<Map<String, Object>> queryBlockTrend(String appCode, String pageCode, long startEpoch, long endEpoch, boolean daily) {
+        String sql = daily ? """
+            SELECT toDate(toDateTime(timestamp)) as hr,
                    countIf(event_type = 'exposure') as exp_pv,
                    uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'exposure') as exp_uv
             FROM gateflow_tracker.events
-            WHERE spma = ? AND spmb = ? AND timestamp >= now() - INTERVAL 24 HOUR
+            WHERE spma = ? AND spmb = ? AND timestamp >= ? AND timestamp <= ?
+            GROUP BY hr ORDER BY hr
+            """ : """
+            SELECT toStartOfHour(toDateTime(timestamp)) as hr,
+                   countIf(event_type = 'exposure') as exp_pv,
+                   uniqIf(user_id, event_type = 'exposure') as exp_uv
+            FROM gateflow_tracker.events
+            WHERE spma = ? AND spmb = ? AND timestamp >= ? AND timestamp <= ?
             GROUP BY hr ORDER BY hr
             """;
-        String[] params = {appCode, pageCode};
-        return executeTrendQuery(sql, params);
+        return executeTrendQuery(sql, daily, appCode, spmSegment(pageCode), startEpoch, endEpoch);
     }
 
-    private List<Map<String, Object>> queryFuncTrend(String appCode, String pageCode, String blockCode) {
-        String sql = """
-            SELECT toStartOfHour(timestamp) as hr,
+    private List<Map<String, Object>> queryFuncTrend(String appCode, String pageCode, String blockCode, long startEpoch, long endEpoch, boolean daily) {
+        String sql = daily ? """
+            SELECT toDate(toDateTime(timestamp)) as hr,
                    countIf(event_type = 'exposure') as exp_pv,
                    uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'exposure') as exp_uv
             FROM gateflow_tracker.events
-            WHERE spma = ? AND spmb = ? AND spmc = ? AND timestamp >= now() - INTERVAL 24 HOUR
+            WHERE spma = ? AND spmb = ? AND spmc = ? AND timestamp >= ? AND timestamp <= ?
+            GROUP BY hr ORDER BY hr
+            """ : """
+            SELECT toStartOfHour(toDateTime(timestamp)) as hr,
+                   countIf(event_type = 'exposure') as exp_pv,
+                   uniqIf(user_id, event_type = 'exposure') as exp_uv
+            FROM gateflow_tracker.events
+            WHERE spma = ? AND spmb = ? AND spmc = ? AND timestamp >= ? AND timestamp <= ?
             GROUP BY hr ORDER BY hr
             """;
-        String[] params = {appCode, pageCode, blockCode};
-        return executeTrendQuery(sql, params);
+        return executeTrendQuery(sql, daily, appCode, spmSegment(pageCode), spmSegment(blockCode), startEpoch, endEpoch);
     }
 
     private Map<String, DayStat> queryDailyStats(int days) {
         String sql = """
-            SELECT toDate(timestamp) as d,
+            SELECT toDate(toDateTime(timestamp)) as d,
                    countIf(event_type = 'exposure') as exp_pv,
                    uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'exposure') as exp_uv,
                    countIf(event_type = 'click') as click_pv,
                    uniqIf(if(user_id != '', user_id, anonymous_id), event_type = 'click') as click_uv
             FROM gateflow_tracker.events
-            WHERE timestamp >= now() - INTERVAL ? DAY
+            WHERE toDateTime(timestamp) >= now() - INTERVAL ? DAY
             GROUP BY d ORDER BY d
             """;
         Map<String, DayStat> map = new LinkedHashMap<>();
@@ -403,25 +498,24 @@ public class AnalysisService {
         return map;
     }
 
-    private List<Map<String, Object>> executeTrendQuery(String sql, String param) {
-        return executeTrendQuery(sql, new String[]{param});
-    }
-
-    private List<Map<String, Object>> executeTrendQuery(String sql, String[] params) {
+    private List<Map<String, Object>> executeTrendQuery(String sql, boolean daily, Object... params) {
         try (Connection c = getChConnection();
              PreparedStatement st = c.prepareStatement(sql)) {
-            for (int i = 0; i < params.length; i++) st.setString(i + 1, params[i]);
+            for (int i = 0; i < params.length; i++) {
+                if (params[i] instanceof Long l) st.setLong(i + 1, l);
+                else st.setString(i + 1, (String) params[i]);
+            }
             try (ResultSet rs = st.executeQuery()) {
-                return mapTrendResult(rs);
+                return mapTrendResult(rs, daily);
             }
         } catch (SQLException e) {
             log.warn("ClickHouse trend query failed: {}", e.getMessage());
         }
-        return emptyTrend();
+        return emptyTrend(daily);
     }
 
-    private List<Map<String, Object>> mapTrendResult(ResultSet rs) throws SQLException {
-        DateTimeFormatter fmt = DateTimeFormatter.ofPattern("HH:mm");
+    private List<Map<String, Object>> mapTrendResult(ResultSet rs, boolean daily) throws SQLException {
+        DateTimeFormatter fmt = DateTimeFormatter.ofPattern(daily ? "MM-dd" : "HH:mm");
         List<Map<String, Object>> trend = new ArrayList<>();
         while (rs.next()) {
             Map<String, Object> p = new LinkedHashMap<>();
@@ -433,17 +527,143 @@ public class AnalysisService {
         return trend;
     }
 
-    private List<Map<String, Object>> emptyTrend() {
+    private List<Map<String, Object>> emptyTrend(boolean daily) {
         List<Map<String, Object>> trend = new ArrayList<>();
-        DateTimeFormatter fmt = DateTimeFormatter.ofPattern("HH:mm");
-        for (int h = 0; h < 24; h++) {
-            Map<String, Object> p = new LinkedHashMap<>();
-            p.put("time", String.format("%02d:00", h));
-            p.put("exposurePv", 0);
-            p.put("exposureUv", 0);
-            trend.add(p);
+        if (daily) {
+            DateTimeFormatter fmt = DateTimeFormatter.ofPattern("MM-dd");
+            LocalDate today = LocalDate.now();
+            for (int d = 6; d >= 0; d--) {
+                Map<String, Object> p = new LinkedHashMap<>();
+                p.put("time", today.minusDays(d).format(fmt));
+                p.put("exposurePv", 0);
+                p.put("exposureUv", 0);
+                trend.add(p);
+            }
+        } else {
+            for (int h = 0; h < 24; h++) {
+                Map<String, Object> p = new LinkedHashMap<>();
+                p.put("time", String.format("%02d:00", h));
+                p.put("exposurePv", 0);
+                p.put("exposureUv", 0);
+                trend.add(p);
+            }
         }
         return trend;
+    }
+
+    /**
+     * Get the exposure PV+UV for a specific block.
+     * Used as CTR denominator for functions, and for the summary cards.
+     */
+    private BlockStat queryBlockExposure(String appCode, String pageCode, String blockCode, long startEpoch, long endEpoch) {
+        boolean hasTime = startEpoch > 0 || endEpoch > 0;
+        String sql = (hasTime ? """
+            SELECT countIf(event_type = 'exposure') as exp_pv,
+                   uniqIf(user_id, event_type = 'exposure') as exp_uv
+            FROM gateflow_tracker.events
+            WHERE spma = ? AND spmb = ? AND spmc = ?
+              AND timestamp >= ? AND timestamp <= ?
+            """ : """
+            SELECT countIf(event_type = 'exposure') as exp_pv,
+                   uniqIf(user_id, event_type = 'exposure') as exp_uv
+            FROM gateflow_tracker.events
+            WHERE spma = ? AND spmb = ? AND spmc = ?
+            """);
+        try (Connection c = getChConnection();
+             PreparedStatement st = c.prepareStatement(sql)) {
+            st.setString(1, appCode);
+            st.setString(2, spmSegment(pageCode));
+            st.setString(3, spmSegment(blockCode));
+            if (hasTime) { st.setLong(4, startEpoch); st.setLong(5, endEpoch); }
+            try (ResultSet rs = st.executeQuery()) {
+                if (rs.next()) return new BlockStat(rs.getLong("exp_pv"), rs.getLong("exp_uv"), 0, 0);
+            }
+        } catch (SQLException e) {
+            log.warn("ClickHouse block exposure query failed: {}", e.getMessage());
+        }
+        return new BlockStat(1, 1, 0, 0); // avoid division by zero
+    }
+
+    private long queryPageAvgStay(String appCode, long startEpoch, long endEpoch) {
+        boolean hasTime = startEpoch > 0 || endEpoch > 0;
+        String sql = (hasTime ? """
+            SELECT avg(stay_duration) as avg_stay
+            FROM gateflow_tracker.events
+            WHERE spma = ? AND event_type = 'stay'
+              AND timestamp >= ? AND timestamp <= ?
+            """ : """
+            SELECT avg(stay_duration) as avg_stay
+            FROM gateflow_tracker.events
+            WHERE spma = ? AND event_type = 'stay'
+            """);
+        try (Connection c = getChConnection();
+             PreparedStatement st = c.prepareStatement(sql)) {
+            st.setString(1, appCode);
+            if (hasTime) { st.setLong(2, startEpoch); st.setLong(3, endEpoch); }
+            try (ResultSet rs = st.executeQuery()) {
+                if (rs.next()) { double v = rs.getDouble("avg_stay"); if (!rs.wasNull()) return (long) v; }
+            }
+        } catch (SQLException e) {
+            log.warn("ClickHouse avg stay query failed: {}", e.getMessage());
+        }
+        return 0;
+    }
+
+    private long querySessionCount(String appCode, long startEpoch, long endEpoch) {
+        boolean hasTime = startEpoch > 0 || endEpoch > 0;
+        String sql = (hasTime ? """
+            SELECT uniq(session_id) as cnt
+            FROM gateflow_tracker.events
+            WHERE spma = ? AND timestamp >= ? AND timestamp <= ?
+            """ : """
+            SELECT uniq(session_id) as cnt
+            FROM gateflow_tracker.events
+            WHERE spma = ?
+            """);
+        try (Connection c = getChConnection();
+             PreparedStatement st = c.prepareStatement(sql)) {
+            st.setString(1, appCode);
+            if (hasTime) { st.setLong(2, startEpoch); st.setLong(3, endEpoch); }
+            try (ResultSet rs = st.executeQuery()) {
+                if (rs.next()) return rs.getLong("cnt");
+            }
+        } catch (SQLException e) {
+            log.warn("ClickHouse session count query failed: {}", e.getMessage());
+        }
+        return 1; // avoid div-by-zero
+    }
+
+    private long queryBounceSessions(String appCode, long startEpoch, long endEpoch) {
+        // Bounce = sessions with exactly 1 page_view
+        boolean hasTime = startEpoch > 0 || endEpoch > 0;
+        String sql = (hasTime ? """
+            SELECT countIf(pv = 1) as bounce
+            FROM (
+              SELECT session_id, countIf(event_type = 'page_view') as pv
+              FROM gateflow_tracker.events
+              WHERE spma = ? AND timestamp >= ? AND timestamp <= ?
+              GROUP BY session_id
+            )
+            """ : """
+            SELECT countIf(pv = 1) as bounce
+            FROM (
+              SELECT session_id, countIf(event_type = 'page_view') as pv
+              FROM gateflow_tracker.events
+              WHERE spma = ?
+              GROUP BY session_id
+            )
+            """);
+        try (Connection c = getChConnection();
+             PreparedStatement st = c.prepareStatement(sql)) {
+            st.setString(1, appCode);
+            if (hasTime) { st.setLong(2, startEpoch); st.setLong(3, endEpoch); }
+            try (ResultSet rs = st.executeQuery()) {
+                if (rs.next()) return rs.getLong("bounce");
+            }
+        } catch (SQLException e) {
+            log.warn("ClickHouse bounce query failed: {}", e.getMessage());
+        }
+        return 0;
     }
 
     // ── Helpers ────────────────────────────────────────────
@@ -461,6 +681,29 @@ public class AnalysisService {
     private TrackerBlock findBlockByCode(Long pageId, String blockCode) {
         return blockMapper.selectOne(new LambdaQueryWrapper<TrackerBlock>()
                 .eq(TrackerBlock::getPageId, pageId).eq(TrackerBlock::getBlockCode, blockCode));
+    }
+
+    // ── SPM Helpers ─────────────────────────────────────────
+
+    /**
+     * Extract the last segment of an SPM code for ClickHouse matching.
+     * e.g. "a_a_policy_report.b_homepage" → "b_homepage"
+     *      "a_a_policy_report.b_homepage.c_top_banner" → "c_top_banner"
+     *      "a_policy_report" → "a_policy_report" (no dot, return as-is)
+     */
+    private String spmSegment(String fullCode) {
+        int lastDot = fullCode.lastIndexOf('.');
+        return lastDot >= 0 ? fullCode.substring(lastDot + 1) : fullCode;
+    }
+
+    /**
+     * Convert a date string ("2026-06-14" or "2026-06-14T00:00:00") to epoch seconds.
+     * Returns 0 for null/empty (treated as unbounded).
+     */
+    private long toEpochSeconds(String dateStr) {
+        if (dateStr == null || dateStr.isEmpty()) return 0;
+        String date = dateStr.contains("T") ? dateStr.substring(0, dateStr.indexOf('T')) : dateStr;
+        return LocalDate.parse(date).atStartOfDay().toEpochSecond(ZoneOffset.UTC);
     }
 
     // ── Stat Records ───────────────────────────────────────

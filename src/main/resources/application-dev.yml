@@ -8,7 +8,7 @@ spring:
     password: root
 
 clickhouse:
-  url: jdbc:clickhouse://127.0.0.1:8123
+  url: jdbc:clickhouse://127.0.0.1:8123/gateflow_tracker?compress_algorithm=gzip
   username: default
   password: ""
 
