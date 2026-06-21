@@ -22,47 +22,54 @@ public class PlatformDataController {
     @GetMapping("/core-metrics")
     @Operation(summary = "核心指标")
     public ResponseEntity<ApiResponse<CoreMetrics>> coreMetrics(
-            @RequestParam String startTime, @RequestParam String endTime) {
-        return ResponseEntity.ok(ApiResponse.success(service.coreMetrics(startTime, endTime)));
+            @RequestParam String startTime, @RequestParam String endTime,
+            @RequestParam(required = false) String appCode) {
+        return ResponseEntity.ok(ApiResponse.success(service.coreMetrics(appCode, startTime, endTime)));
     }
 
     @GetMapping("/channels")
     @Operation(summary = "渠道分布")
     public ResponseEntity<ApiResponse<List<ChannelBreakdown>>> channels(
-            @RequestParam String startTime, @RequestParam String endTime) {
-        return ResponseEntity.ok(ApiResponse.success(service.channels(startTime, endTime)));
+            @RequestParam String startTime, @RequestParam String endTime,
+            @RequestParam(required = false) String appCode) {
+        return ResponseEntity.ok(ApiResponse.success(service.channels(appCode, startTime, endTime)));
     }
 
     @GetMapping("/pages")
     @Operation(summary = "页面分布")
     public ResponseEntity<ApiResponse<List<PageBreakdown>>> pages(
-            @RequestParam String startTime, @RequestParam String endTime) {
-        return ResponseEntity.ok(ApiResponse.success(service.pages(startTime, endTime)));
+            @RequestParam String startTime, @RequestParam String endTime,
+            @RequestParam(required = false) String appCode) {
+        return ResponseEntity.ok(ApiResponse.success(service.pages(appCode, startTime, endTime)));
     }
 
     @GetMapping("/realtime")
     @Operation(summary = "实时快照")
-    public ResponseEntity<ApiResponse<RealtimeSnapshot>> realtime() {
-        return ResponseEntity.ok(ApiResponse.success(service.realtime()));
+    public ResponseEntity<ApiResponse<RealtimeSnapshot>> realtime(
+            @RequestParam(required = false) String appCode) {
+        return ResponseEntity.ok(ApiResponse.success(service.realtime(appCode)));
     }
 
     @GetMapping("/analysis")
     @Operation(summary = "分析概览")
     public ResponseEntity<ApiResponse<AnalysisOverview>> analysis(
-            @RequestParam String startTime, @RequestParam String endTime) {
-        return ResponseEntity.ok(ApiResponse.success(service.analysis(startTime, endTime)));
+            @RequestParam String startTime, @RequestParam String endTime,
+            @RequestParam(required = false) String appCode) {
+        return ResponseEntity.ok(ApiResponse.success(service.analysis(appCode, startTime, endTime)));
     }
 
     @GetMapping("/retention")
     @Operation(summary = "留存")
     public ResponseEntity<ApiResponse<RetentionResult>> retention(
-            @RequestParam String startTime, @RequestParam String endTime) {
-        return ResponseEntity.ok(ApiResponse.success(service.retention(startTime, endTime)));
+            @RequestParam String startTime, @RequestParam String endTime,
+            @RequestParam(required = false) String appCode) {
+        return ResponseEntity.ok(ApiResponse.success(service.retention(appCode, startTime, endTime)));
     }
 
     @GetMapping("/anomalies")
     @Operation(summary = "异常检测")
-    public ResponseEntity<ApiResponse<List<AnomalyItem>>> anomalies(@RequestParam String date) {
-        return ResponseEntity.ok(ApiResponse.success(service.anomalies(date)));
+    public ResponseEntity<ApiResponse<List<AnomalyItem>>> anomalies(
+            @RequestParam String date, @RequestParam(required = false) String appCode) {
+        return ResponseEntity.ok(ApiResponse.success(service.anomalies(appCode, date)));
     }
 }
